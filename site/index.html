@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brussels Live</title>
+<meta name="description" content="Every STIB metro, tram and bus in Brussels, on a live map.">
+<script src="https://cdn.tailwindcss.com/3.4.16"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  .leaflet-tile-pane { filter: grayscale(1) contrast(.9) brightness(1.05); }
+  .chip[aria-pressed="false"] { opacity: .35; }
+  .line[aria-pressed="true"] { outline: 2px solid #0f172a; outline-offset: 2px; }
+</style>
+</head>
+<body class="bg-white text-slate-900 antialiased">
+<div class="flex flex-col lg:flex-row h-[100dvh]">
+  <aside class="order-2 lg:order-1 lg:w-[380px] shrink-0 h-[45dvh] lg:h-full overflow-y-auto border-t lg:border-t-0 lg:border-r border-slate-200 p-4 lg:p-6 space-y-5">
+    <header>
+      <h1 class="text-2xl font-semibold tracking-tight">Brussels Live</h1>
+      <p class="text-slate-500 text-sm mt-1">Every STIB metro, tram and bus, right now.</p>
+      <p class="mt-3 text-sm"><span id="count" class="font-semibold">…</span> <span id="ago" class="text-slate-500"></span></p>
+    </header>
+
+    <div class="flex gap-2" id="modes">
+      <button class="chip px-3 py-1.5 rounded-full border border-slate-300 text-sm" aria-pressed="true" data-mode="metro">Metro <span class="text-slate-500" data-n="metro"></span></button>
+      <button class="chip px-3 py-1.5 rounded-full border border-slate-300 text-sm" aria-pressed="true" data-mode="tram">Tram <span class="text-slate-500" data-n="tram"></span></button>
+      <button class="chip px-3 py-1.5 rounded-full border border-slate-300 text-sm" aria-pressed="true" data-mode="bus">Bus <span class="text-slate-500" data-n="bus"></span></button>
+    </div>
+
+    <section id="picked" class="hidden rounded-lg border border-slate-200 p-4 space-y-2"></section>
+
+    <section>
+      <h2 class="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">Pick a line</h2>
+      <div id="lines" class="space-y-3"></div>
+    </section>
+
+    <details class="text-sm text-slate-600">
+      <summary class="cursor-pointer font-medium text-slate-900">How positions are worked out</summary>
+      <p class="mt-2">STIB doesn't publish GPS. Every 20 seconds its feed says, for each vehicle, which stop it last passed, how many metres ago, and where it's heading. This page puts the vehicle that many metres along the line's real route (from STIB's timetable shapes), then glides it to the next reading, so a dot is about 20 seconds behind reality.</p>
+    </details>
+
+    <footer class="text-xs text-slate-500 pt-2">Developed by <a class="underline" href="https://www.jwds.me">Jawad Shaissah</a> · Data: STIB-MIVB open data · Map © OpenStreetMap</footer>
+  </aside>
+  <div id="map" class="order-1 lg:order-2 flex-1 min-h-0"></div>
+</div>
+
+<script>
+const POLL = 20000;
+const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
+const RADIUS = { metro: 7, tram: 6, bus: 5 };
+const norm = id => id.replace(/[A-Z]$/, '').replace(/^0+/, '');
+
+const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([50.845, 4.36], 13);
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+
+let net, vehicles = [], updated = 0, line = null, picked = null;
+const modeOn = { metro: true, tram: true, bus: true };
+const routeLayer = L.layerGroup().addTo(map);
+
+// --- geometry: metres along a pattern's path -> lat/lon
+function prep(p) {
+  p.cum = [0];
+  for (let i = 1; i < p.path.length; i++) p.cum.push(p.cum[i - 1] + map.distance(p.path[i - 1], p.path[i]));
+}
+function pointAt(p, d) {
+  const c = p.cum; d = Math.max(0, Math.min(d, c[c.length - 1]));
+  let lo = 0, hi = c.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
+  const t = c[hi] === c[lo] ? 0 : (d - c[lo]) / (c[hi] - c[lo]), a = p.path[lo], b = p.path[hi];
+  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+}
+
+// --- which pattern a reading belongs to: the one ending at its destination, else one that has the stop
+function locate(lineId, r) {
+  const stop = norm(r.pointId), dest = norm(r.directionId);
+  const cands = (net.byLine[lineId] || []).filter(p => p.stops.includes(stop));
+  const p = cands.find(p => p.to === dest)
+         || cands.find(p => p.stops.indexOf(dest) > p.stops.indexOf(stop))
+         || cands[0];
+  if (!p) return null;
+  const i = p.stops.indexOf(stop);
+  const next = p.at[i + 1] ?? p.at[i];
+  return { p, i, d: Math.min(p.at[i] + r.distanceFromPoint, next) };
+}
+
+// --- STIB gives no vehicle ids: match each new reading to the old one just behind it on the same pattern
+function match(old, fresh) {
+  const pool = old.slice();
+  for (const v of fresh) {
+    let best = -1, gap = Infinity;
+    pool.forEach((o, k) => {
+      if (o.p !== v.p) return;
+      const g = v.d - o.d;
+      if (g > -30 && g < 1500 && Math.abs(g) < gap) { gap = Math.abs(g); best = k; }
+    });
+    if (best >= 0) { const o = pool.splice(best, 1)[0]; v.from = o.shown ?? o.d; v.marker = o.marker; v.id = o.id; }
+    else v.from = v.d;
+  }
+  pool.forEach(o => o.marker.remove());
+}
+
+let nextId = 1;
+async function poll() {
+  try {
+    const res = await fetch(FEED, { cache: 'no-store' });
+    const rows = (await res.json()).results;
+    const fresh = [];
+    for (const row of rows) {
+      if (!net.lines[row.lineid]) continue;
+      for (const r of JSON.parse(row.vehiclepositions)) {
+        const loc = locate(row.lineid, r);
+        if (loc) fresh.push({ line: row.lineid, ...loc, dest: norm(r.directionId) });
+      }
+    }
+    match(vehicles, fresh);
+    for (const v of fresh) {
+      v.id ??= nextId++;
+      v.marker ??= L.circleMarker(pointAt(v.p, v.from), { radius: RADIUS[net.lines[v.line].mode], weight: 2, color: '#fff',
+        fillColor: net.lines[v.line].color, fillOpacity: 1 }).on('click', () => pick(v.id));
+      v.marker.bindTooltip(() => `${v.line} → ${stopName(v.dest)}`, { direction: 'top' });
+    }
+    vehicles = fresh;
+    restyle();
+    updated = Date.now();
+    render();
+  } catch (e) { console.error(e); }
+}
+
+function stopName(id) {
+  const s = net.stops[id];
+  return s ? s[2].toLowerCase().replace(/(^|[\s\-'(])\S/g, c => c.toUpperCase()) : id;
+}
+const visible = v => modeOn[net.lines[v.line].mode] && (!line || v.line === line);
+
+// --- animation: glide from the previous reading to the new one over one poll interval
+function frame() {
+  const k = Math.min(1, (Date.now() - updated) / POLL);
+  for (const v of vehicles) {
+    v.shown = v.from + (v.d - v.from) * k;
+    if (visible(v)) { v.marker.setLatLng(pointAt(v.p, v.shown)); if (!map.hasLayer(v.marker)) v.marker.addTo(map); }
+    else v.marker.remove();
+  }
+  if (picked) showPicked();
+  requestAnimationFrame(frame);
+}
+
+function render() {
+  const n = { metro: 0, tram: 0, bus: 0 };
+  vehicles.forEach(v => n[net.lines[v.line].mode]++);
+  for (const m in n) document.querySelector(`[data-n="${m}"]`).textContent = n[m];
+  document.getElementById('count').textContent = `${vehicles.length} vehicles moving`;
+}
+setInterval(() => {
+  if (updated) document.getElementById('ago').textContent = `· updated ${Math.round((Date.now() - updated) / 1000)}s ago`;
+}, 1000);
+
+function badge(id, extra = '') {
+  const l = net.lines[id];
+  return `<span class="inline-flex min-w-[2.25rem] justify-center rounded px-1.5 py-0.5 text-sm font-semibold ${extra}" style="background:${l.color};color:${l.text}">${id}</span>`;
+}
+
+function pick(id) { picked = id; restyle(); showPicked(); }
+// a picked line gets bigger dots; the picked vehicle a dark ring
+function restyle() {
+  for (const v of vehicles) {
+    const r = RADIUS[net.lines[v.line].mode] + (line ? 3 : 0);
+    v.marker.setStyle(v.id === picked ? { color: '#0f172a', weight: 3 } : { color: '#fff', weight: 2 }).setRadius(r);
+  }
+}
+function showPicked() {
+  const v = vehicles.find(v => v.id === picked), el = document.getElementById('picked');
+  if (!v) { el.classList.add('hidden'); picked = null; return; }
+  const i = v.p.stops.findIndex((s, k) => v.p.at[k + 1] === undefined || v.p.at[k + 1] > v.shown);
+  const last = v.p.stops[i], next = v.p.stops[i + 1];
+  const html = `<div class="flex items-center gap-2">${badge(v.line)}<span class="font-medium">to ${stopName(v.dest)}</span>
+      <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;restyle();document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
+    <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
+`;
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.classList.remove('hidden');
+}
+
+function selectLine(id) {
+  line = line === id ? null : id;
+  document.querySelectorAll('.line').forEach(b => b.setAttribute('aria-pressed', b.dataset.line === line));
+  routeLayer.clearLayers();
+  restyle();
+  history.replaceState(null, '', line ? '#' + line : location.pathname);
+  if (!line) return;
+  const ps = net.byLine[line];
+  ps.forEach(p => L.polyline(p.path, { color: net.lines[line].color, weight: 5, opacity: .3 }).addTo(routeLayer));
+  map.fitBounds(L.latLngBounds(ps.flatMap(p => p.path)), { padding: [30, 30] });
+}
+
+document.getElementById('modes').addEventListener('click', e => {
+  const b = e.target.closest('[data-mode]'); if (!b) return;
+  modeOn[b.dataset.mode] = !modeOn[b.dataset.mode];
+  b.setAttribute('aria-pressed', modeOn[b.dataset.mode]);
+});
+document.getElementById('lines').addEventListener('click', e => {
+  const b = e.target.closest('[data-line]'); if (b) selectLine(b.dataset.line);
+});
+
+(async () => {
+  net = await (await fetch('network.json')).json();
+  net.byLine = {};
+  for (const p of net.patterns) { prep(p); (net.byLine[p.line] ??= []).push(p); }
+  const order = s => [s.replace(/\D/g, '') | 0, s];
+  document.getElementById('lines').innerHTML = ['metro', 'tram', 'bus'].map(m => {
+    const ids = Object.keys(net.lines).filter(id => net.lines[id].mode === m)
+      .sort((a, b) => order(a)[0] - order(b)[0] || a.localeCompare(b));
+    return `<div><p class="text-sm text-slate-500 mb-1.5 capitalize">${m}</p><div class="flex flex-wrap gap-1.5">${
+      ids.map(id => `<button class="line" data-line="${id}" aria-pressed="false" title="${net.lines[id].name}">${badge(id)}</button>`).join('')}</div></div>`;
+  }).join('');
+  if (net.lines[location.hash.slice(1)]) selectLine(location.hash.slice(1));
+  await poll();
+  setInterval(poll, POLL);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
