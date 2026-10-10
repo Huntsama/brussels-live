@@ -92,7 +92,9 @@ def build():
     for r in pages("StopDetails"):
         gps = json.loads(r["gpscoordinates"])
         name = json.loads(r["name"])
-        stops[norm(r["id"])] = [round(gps["latitude"], 6), round(gps["longitude"], 6), name.get("fr") or name.get("nl")]
+        # 4th field: the id the WaitingTimes feed uses (leading zeros kept, platform letter dropped)
+        stops[norm(r["id"])] = [round(gps["latitude"], 6), round(gps["longitude"], 6), name.get("fr") or name.get("nl"),
+                                re.sub(r"[A-Z]$", "", r["id"])]
 
     z = zipfile.ZipFile(io.BytesIO(get(f"{API}/gtfs/feed/stibmivb/static")))
     read = lambda f: csv.DictReader(io.TextIOWrapper(z.open(f), "utf-8-sig"))

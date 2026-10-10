@@ -1,6 +1,6 @@
 # Brussels Live
 
-Every STIB metro, tram and bus in Brussels on one map, moving in real time, in STIB's own line colours.
+Every STIB metro, tram and bus in Brussels on one map, moving in real time, in STIB's own line colours. Plus what's arriving at the stops near you.
 
 **Live:** https://huntsama.github.io/brussels-live/
 
@@ -31,6 +31,15 @@ STIB's open data doesn't say where a vehicle *is*. Every ~20 seconds it says, pe
 4. **Direction:** `directionId` is the terminus. A short-turning vehicle is matched to the route that contains both its stop and its terminus.
 
 The page reads STIB's feed straight from the browser (it allows cross-origin requests, no key), so there is no backend.
+
+## Near me
+
+- **Your location:** "Show what's near me" uses the browser's Geolocation API through MapLibre's locate control (blue dot, accuracy circle, follow mode). It **stays on the device**: no server, nothing stored.
+- **Nearby stops:** stops within 500 m, grouped by name (one name, several platforms).
+- **Arrival times:** for each nearby stop, the next two arrivals per line and direction come from STIB's own `WaitingTimes` predictions and refresh every 20 s. Tap a row to show that line on the map.
+- **Install as an app:** a web app manifest lets you add it to your phone's home screen, where it opens full screen like an app.
+
+![Near me](docs/near.jpg)
 
 ## Drawing
 

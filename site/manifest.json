@@ -1,0 +1,10 @@
+{
+  "name": "Brussels Live",
+  "short_name": "Brussels Live",
+  "description": "Every STIB metro, tram and bus in Brussels, live, and what's arriving near you.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
