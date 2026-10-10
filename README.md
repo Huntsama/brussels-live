@@ -34,6 +34,10 @@ The page reads STIB's feed straight from the browser (it allows cross-origin req
 
 ![One line picked](docs/line.jpg)
 
+## Fed by Brussels Lakehouse
+
+[Brussels Lakehouse](https://github.com/Huntsama/brussels-lakehouse) has recorded STIB every 5 minutes since October. It publishes `lines.json`, which gives each line's typical lateness by hour of day. Click a vehicle and the panel shows, for example, *"At this hour line 71 is usually 0.6 min late"*. The lakehouse answers how late lines usually are; this map shows where the vehicles are now.
+
 ## Run locally
 
 ```bash

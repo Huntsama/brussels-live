@@ -39,6 +39,7 @@
     <details class="text-sm text-slate-600">
       <summary class="cursor-pointer font-medium text-slate-900">How positions are worked out</summary>
       <p class="mt-2">STIB doesn't publish GPS. Every 20 seconds its feed says, for each vehicle, which stop it last passed, how many metres ago, and where it's heading. This page puts the vehicle that many metres along the line's real route (from STIB's timetable shapes), then glides it to the next reading, so a dot is about 20 seconds behind reality.</p>
+      <p class="mt-2">"Usually … late" comes from <a class="underline" href="https://lakehouse.jwds.me">Brussels Lakehouse</a>, which has been recording STIB every 5 minutes.</p>
     </details>
 
     <footer class="text-xs text-slate-500 pt-2">Developed by <a class="underline" href="https://www.jwds.me">Jawad Shaissah</a> · Data: STIB-MIVB open data · Map © OpenStreetMap</footer>
@@ -49,6 +50,7 @@
 <script>
 const POLL = 20000;
 const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
+const LAKE = 'https://lakehouse.jwds.me/lines.json';
 const RADIUS = { metro: 7, tram: 6, bus: 5 };
 const norm = id => id.replace(/[A-Z]$/, '').replace(/^0+/, '');
 
@@ -56,7 +58,7 @@ const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([50
 L.control.zoom({ position: 'topright' }).addTo(map);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
 
-let net, vehicles = [], updated = 0, line = null, picked = null;
+let net, lake = {}, vehicles = [], updated = 0, line = null, picked = null;
 const modeOn = { metro: true, tram: true, bus: true };
 const routeLayer = L.layerGroup().addTo(map);
 
@@ -157,6 +159,15 @@ setInterval(() => {
   if (updated) document.getElementById('ago').textContent = `· updated ${Math.round((Date.now() - updated) / 1000)}s ago`;
 }, 1000);
 
+function usually(id) {
+  const l = lake[id];
+  if (!l) return '';
+  const h = l.by_hour?.[new Date().getHours()] ?? l.excess;
+  if (h == null) return '';
+  const word = h < 0.5 ? 'usually on time' : `usually ${h.toFixed(1)} min late`;
+  return `<p class="text-sm text-slate-600">At this hour line ${id} is ${word} <span class="text-slate-400">(Lakehouse)</span>.</p>`;
+}
+
 function badge(id, extra = '') {
   const l = net.lines[id];
   return `<span class="inline-flex min-w-[2.25rem] justify-center rounded px-1.5 py-0.5 text-sm font-semibold ${extra}" style="background:${l.color};color:${l.text}">${id}</span>`;
@@ -178,7 +189,7 @@ function showPicked() {
   const html = `<div class="flex items-center gap-2">${badge(v.line)}<span class="font-medium">to ${stopName(v.dest)}</span>
       <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;restyle();document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
     <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
-`;
+    ${usually(v.line)}`;
   if (el.innerHTML !== html) el.innerHTML = html;
   el.classList.remove('hidden');
 }
@@ -215,6 +226,7 @@ document.getElementById('lines').addEventListener('click', e => {
     return `<div><p class="text-sm text-slate-500 mb-1.5 capitalize">${m}</p><div class="flex flex-wrap gap-1.5">${
       ids.map(id => `<button class="line" data-line="${id}" aria-pressed="false" title="${net.lines[id].name}">${badge(id)}</button>`).join('')}</div></div>`;
   }).join('');
+  fetch(LAKE).then(r => r.json()).then(d => { lake = d.lines; }).catch(() => {});  // optional: the map works without it
   if (net.lines[location.hash.slice(1)]) selectLine(location.hash.slice(1));
   await poll();
   setInterval(poll, POLL);
