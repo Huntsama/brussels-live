@@ -6,12 +6,13 @@
 <title>Brussels Live</title>
 <meta name="description" content="Every STIB metro, tram and bus in Brussels, on a live map.">
 <script src="https://cdn.tailwindcss.com/3.4.16"></script>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.1.14/dist.min.js"></script>
 <style>
-  .leaflet-tile-pane { filter: grayscale(1) contrast(.9) brightness(1.05); }
   .chip[aria-pressed="false"] { opacity: .35; }
   .line[aria-pressed="true"] { outline: 2px solid #0f172a; outline-offset: 2px; }
+  .deck-tooltip { font: 13px/1.3 ui-sans-serif, system-ui, sans-serif !important; border-radius: 6px; }
 </style>
 </head>
 <body class="bg-white text-slate-900 antialiased">
@@ -38,11 +39,11 @@
 
     <details class="text-sm text-slate-600">
       <summary class="cursor-pointer font-medium text-slate-900">How positions are worked out</summary>
-      <p class="mt-2">STIB doesn't publish GPS. Every 20 seconds its feed says, for each vehicle, which stop it last passed, how many metres ago, and where it's heading. This page puts the vehicle that many metres along the line's real route (from STIB's timetable shapes), then glides it to the next reading, so a dot is about 20 seconds behind reality.</p>
+      <p class="mt-2">STIB doesn't publish GPS. Every 20 seconds its feed says, for each vehicle, which stop it last passed, how many metres ago, and where it's heading. This page puts the vehicle that many metres along the line's real route (from STIB's timetable shapes), then glides it to the next reading, so a vehicle is drawn about 20 seconds behind reality. Zoom in: trams, metros and buses are drawn at roughly their real length.</p>
       <p class="mt-2">"Usually … late" comes from <a class="underline" href="https://lakehouse.jwds.me">Brussels Lakehouse</a>, which has been recording STIB every 5 minutes.</p>
     </details>
 
-    <footer class="text-xs text-slate-500 pt-2">Developed by <a class="underline" href="https://www.jwds.me">Jawad Shaissah</a> · Data: STIB-MIVB open data · Map © OpenStreetMap</footer>
+    <footer class="text-xs text-slate-500 pt-2">Developed by <a class="underline" href="https://www.jwds.me">Jawad Shaissah</a> · Data: STIB-MIVB open data · Map © OpenFreeMap, OpenMapTiles, OpenStreetMap</footer>
   </aside>
   <div id="map" class="order-1 lg:order-2 flex-1 min-h-0"></div>
 </div>
@@ -51,28 +52,71 @@
 const POLL = 20000;
 const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
 const LAKE = 'https://lakehouse.jwds.me/lines.json';
-const RADIUS = { metro: 7, tram: 6, bus: 5 };
 const norm = id => id.replace(/[A-Z]$/, '').replace(/^0+/, '');
+const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
 
-const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([50.845, 4.36], 13);
-L.control.zoom({ position: 'topright' }).addTo(map);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+// --- vehicles seen from above, front pointing up. Real lengths in metres; never smaller than minPx on screen.
+const SHAPES = {
+  metro: { w: 12, h: 92, m: 92, minPx: 26, cars: 4 },
+  tram:  { w: 11, h: 44, m: 44, minPx: 20, cars: 3 },
+  bus:   { w: 11, h: 22, m: 18, minPx: 14, cars: 1 },
+};
+function vehicleSvg(mode, color) {
+  const s = SHAPES[mode], gap = 1.5, car = (s.h - gap * (s.cars - 1)) / s.cars;
+  let g = '';
+  for (let i = 0; i < s.cars; i++) {
+    const y = i * (car + gap), first = i === 0, last = i === s.cars - 1;
+    g += `<rect x="1" y="${y + .5}" width="${s.w - 2}" height="${car - 1}" rx="${first || last ? 4 : 1.5}" fill="${color}" stroke="#0f172a" stroke-opacity=".45" stroke-width=".8"/>`;
+  }
+  g += `<rect x="2.6" y="2.2" width="${s.w - 5.2}" height="3" rx="1.2" fill="#fff" opacity=".9"/>`;  // windscreen = front
+  return `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${s.w * 4}" height="${s.h * 4}" viewBox="0 0 ${s.w} ${s.h}">${g}</svg>`);
+}
 
-let net, lake = {}, vehicles = [], updated = 0, line = null, picked = null;
+const map = new maplibregl.Map({ container: 'map', style: 'https://tiles.openfreemap.org/styles/positron',
+  center: [4.36, 50.845], zoom: 12.6, attributionControl: { compact: true } });
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [],
+  getTooltip: ({ object }) => object?.marker && `${object.line} → ${stopName(object.dest)}` });
+map.addControl(overlay);
+
+let net, lake = {}, vehicles = [], updated = 0, line = null, picked = null, nextId = 1;
 const modeOn = { metro: true, tram: true, bus: true };
-const routeLayer = L.layerGroup().addTo(map);
 
-// --- geometry: metres along a pattern's path -> lat/lon
+// --- geometry: metres along a pattern's path -> [lon, lat]
+function metres(a, b) {
+  const x = (b[1] - a[1]) * Math.cos((a[0] + b[0]) * Math.PI / 360);
+  return Math.hypot(x, b[0] - a[0]) * 111320;
+}
 function prep(p) {
   p.cum = [0];
-  for (let i = 1; i < p.path.length; i++) p.cum.push(p.cum[i - 1] + map.distance(p.path[i - 1], p.path[i]));
+  for (let i = 1; i < p.path.length; i++) p.cum.push(p.cum[i - 1] + metres(p.path[i - 1], p.path[i]));
+  p.lonlat = p.path.map(([la, lo]) => [lo, la]);
+}
+function seg(p, d) {
+  const c = p.cum; let lo = 0, hi = c.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
+  return [lo, hi];
 }
 function pointAt(p, d) {
-  const c = p.cum; d = Math.max(0, Math.min(d, c[c.length - 1]));
-  let lo = 0, hi = c.length - 1;
-  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
-  const t = c[hi] === c[lo] ? 0 : (d - c[lo]) / (c[hi] - c[lo]), a = p.path[lo], b = p.path[hi];
+  d = Math.max(0, Math.min(d, p.cum[p.cum.length - 1]));
+  const [lo, hi] = seg(p, d), c = p.cum, t = c[hi] === c[lo] ? 0 : (d - c[lo]) / (c[hi] - c[lo]);
+  const a = p.lonlat[lo], b = p.lonlat[hi];
   return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+}
+// heading in deck.gl terms: degrees counter-clockwise from north
+function angleAt(p, d) {
+  const a = pointAt(p, d - 8), b = pointAt(p, d + 8);
+  const dx = (b[0] - a[0]) * Math.cos(a[1] * Math.PI / 180), dy = b[1] - a[1];
+  return -Math.atan2(dx, dy) * 180 / Math.PI;
+}
+// the road between two distances, with "time" = metres behind the vehicle, for the fading trail
+function trail(p, from, to) {
+  from = Math.max(0, from);
+  const [i] = seg(p, from), [, j] = seg(p, to), path = [pointAt(p, from)], ts = [from - to];
+  for (let k = i + 1; k < j; k++) { path.push(p.lonlat[k]); ts.push(p.cum[k] - to); }
+  path.push(pointAt(p, to)); ts.push(0);
+  return { path, ts };
 }
 
 // --- which pattern a reading belongs to: the one ending at its destination, else one that has the stop
@@ -84,8 +128,7 @@ function locate(lineId, r) {
          || cands[0];
   if (!p) return null;
   const i = p.stops.indexOf(stop);
-  const next = p.at[i + 1] ?? p.at[i];
-  return { p, i, d: Math.min(p.at[i] + r.distanceFromPoint, next) };
+  return { p, d: Math.min(p.at[i] + r.distanceFromPoint, p.at[i + 1] ?? p.at[i]) };
 }
 
 // --- STIB gives no vehicle ids: match each new reading to the old one just behind it on the same pattern
@@ -98,36 +141,29 @@ function match(old, fresh) {
       const g = v.d - o.d;
       if (g > -30 && g < 1500 && Math.abs(g) < gap) { gap = Math.abs(g); best = k; }
     });
-    if (best >= 0) { const o = pool.splice(best, 1)[0]; v.from = o.shown ?? o.d; v.marker = o.marker; v.id = o.id; }
-    else v.from = v.d;
+    if (best >= 0) { const o = pool.splice(best, 1)[0]; v.from = o.shown ?? o.d; v.id = o.id; }
+    else { v.from = v.d; v.id = nextId++; }
   }
-  pool.forEach(o => o.marker.remove());
 }
 
-let nextId = 1;
 async function poll() {
   try {
-    const res = await fetch(FEED, { cache: 'no-store' });
-    const rows = (await res.json()).results;
+    const rows = (await (await fetch(FEED, { cache: 'no-store' })).json()).results;
     const fresh = [];
     for (const row of rows) {
       if (!net.lines[row.lineid]) continue;
       for (const r of JSON.parse(row.vehiclepositions)) {
         const loc = locate(row.lineid, r);
-        if (loc) fresh.push({ line: row.lineid, ...loc, dest: norm(r.directionId) });
+        if (loc) fresh.push({ line: row.lineid, mode: net.lines[row.lineid].mode, dest: norm(r.directionId), ...loc });
       }
     }
     match(vehicles, fresh);
-    for (const v of fresh) {
-      v.id ??= nextId++;
-      v.marker ??= L.circleMarker(pointAt(v.p, v.from), { radius: RADIUS[net.lines[v.line].mode], weight: 2, color: '#fff',
-        fillColor: net.lines[v.line].color, fillOpacity: 1 }).on('click', () => pick(v.id));
-      v.marker.bindTooltip(() => `${v.line} → ${stopName(v.dest)}`, { direction: 'top' });
-    }
     vehicles = fresh;
-    restyle();
     updated = Date.now();
-    render();
+    const n = { metro: 0, tram: 0, bus: 0 };
+    vehicles.forEach(v => n[v.mode]++);
+    for (const m in n) document.querySelector(`[data-n="${m}"]`).textContent = n[m];
+    document.getElementById('count').textContent = `${vehicles.length} vehicles moving`;
   } catch (e) { console.error(e); }
 }
 
@@ -135,25 +171,43 @@ function stopName(id) {
   const s = net.stops[id];
   return s ? s[2].toLowerCase().replace(/(^|[\s\-'(])\S/g, c => c.toUpperCase()) : id;
 }
-const visible = v => modeOn[net.lines[v.line].mode] && (!line || v.line === line);
 
-// --- animation: glide from the previous reading to the new one over one poll interval
+// --- every frame: glide each vehicle from its previous reading to the new one over one poll interval
 function frame() {
   const k = Math.min(1, (Date.now() - updated) / POLL);
+  const shown = [];
   for (const v of vehicles) {
     v.shown = v.from + (v.d - v.from) * k;
-    if (visible(v)) { v.marker.setLatLng(pointAt(v.p, v.shown)); if (!map.hasLayer(v.marker)) v.marker.addTo(map); }
-    else v.marker.remove();
+    if (!modeOn[v.mode] || (line && v.line !== line)) continue;
+    v.pos = pointAt(v.p, v.shown);
+    v.angle = angleAt(v.p, v.shown);
+    v.t = trail(v.p, v.shown - 160, v.shown);
+    v.marker = true;
+    shown.push(v);
   }
+  const sel = vehicles.find(v => v.id === picked);
+  const mpp = 78271.517 * Math.cos(50.85 * Math.PI / 180) / 2 ** map.getZoom(), bearing = map.getBearing();
+  const color = id => rgb(net.lines[id].color);
+  overlay.setProps({ layers: [
+    new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
+      getWidth: p => p.line === line ? 5 : 2, getColor: p => [...color(p.line), line ? (p.line === line ? 120 : 15) : 45],
+      updateTriggers: { getWidth: line, getColor: line } }),
+    new deck.TripsLayer({ id: 'trails', data: shown, getPath: v => v.t.path,
+      getTimestamps: v => v.t.ts, getColor: v => color(v.line), currentTime: 0, trailLength: 160,
+      widthMinPixels: 3, capRounded: true, jointRounded: true }),
+    sel && modeOn[sel.mode] && new deck.ScatterplotLayer({ id: 'picked', data: [sel], getPosition: v => v.pos,
+      getRadius: 60, radiusMinPixels: 22, stroked: true, filled: true, getFillColor: [15, 23, 42, 25],
+      getLineColor: [15, 23, 42], lineWidthMinPixels: 2 }),
+    // one layer per mode so each has its own size; metro drawn on top
+    ...['bus', 'tram', 'metro'].map(m => new deck.IconLayer({ id: m, data: shown.filter(v => v.mode === m), pickable: true,
+      getIcon: v => ({ id: v.mode + v.line, url: vehicleSvg(v.mode, net.lines[v.line].color),
+                       width: SHAPES[v.mode].w * 4, height: SHAPES[v.mode].h * 4 }),
+      // real length in pixels at this zoom, but never smaller than minPx (deck's sizeMinPixels ignores flat icons)
+      getPosition: v => v.pos, getAngle: v => v.angle + bearing, getSize: Math.max(SHAPES[m].minPx, SHAPES[m].m / mpp),
+      onClick: ({ object }) => pick(object.id) })),
+  ]});
   if (picked) showPicked();
   requestAnimationFrame(frame);
-}
-
-function render() {
-  const n = { metro: 0, tram: 0, bus: 0 };
-  vehicles.forEach(v => n[net.lines[v.line].mode]++);
-  for (const m in n) document.querySelector(`[data-n="${m}"]`).textContent = n[m];
-  document.getElementById('count').textContent = `${vehicles.length} vehicles moving`;
 }
 setInterval(() => {
   if (updated) document.getElementById('ago').textContent = `· updated ${Math.round((Date.now() - updated) / 1000)}s ago`;
@@ -168,26 +222,19 @@ function usually(id) {
   return `<p class="text-sm text-slate-600">At this hour line ${id} is ${word} <span class="text-slate-400">(Lakehouse)</span>.</p>`;
 }
 
-function badge(id, extra = '') {
+function badge(id) {
   const l = net.lines[id];
-  return `<span class="inline-flex min-w-[2.25rem] justify-center rounded px-1.5 py-0.5 text-sm font-semibold ${extra}" style="background:${l.color};color:${l.text}">${id}</span>`;
+  return `<span class="inline-flex min-w-[2.25rem] justify-center rounded px-1.5 py-0.5 text-sm font-semibold" style="background:${l.color};color:${l.text}">${id}</span>`;
 }
 
-function pick(id) { picked = id; restyle(); showPicked(); }
-// a picked line gets bigger dots; the picked vehicle a dark ring
-function restyle() {
-  for (const v of vehicles) {
-    const r = RADIUS[net.lines[v.line].mode] + (line ? 3 : 0);
-    v.marker.setStyle(v.id === picked ? { color: '#0f172a', weight: 3 } : { color: '#fff', weight: 2 }).setRadius(r);
-  }
-}
+function pick(id) { picked = id; showPicked(); }
 function showPicked() {
   const v = vehicles.find(v => v.id === picked), el = document.getElementById('picked');
   if (!v) { el.classList.add('hidden'); picked = null; return; }
   const i = v.p.stops.findIndex((s, k) => v.p.at[k + 1] === undefined || v.p.at[k + 1] > v.shown);
   const last = v.p.stops[i], next = v.p.stops[i + 1];
   const html = `<div class="flex items-center gap-2">${badge(v.line)}<span class="font-medium">to ${stopName(v.dest)}</span>
-      <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;restyle();document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
+      <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
     <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
     ${usually(v.line)}`;
   if (el.innerHTML !== html) el.innerHTML = html;
@@ -197,13 +244,11 @@ function showPicked() {
 function selectLine(id) {
   line = line === id ? null : id;
   document.querySelectorAll('.line').forEach(b => b.setAttribute('aria-pressed', b.dataset.line === line));
-  routeLayer.clearLayers();
-  restyle();
   history.replaceState(null, '', line ? '#' + line : location.pathname);
   if (!line) return;
-  const ps = net.byLine[line];
-  ps.forEach(p => L.polyline(p.path, { color: net.lines[line].color, weight: 5, opacity: .3 }).addTo(routeLayer));
-  map.fitBounds(L.latLngBounds(ps.flatMap(p => p.path)), { padding: [30, 30] });
+  const pts = net.byLine[line].flatMap(p => p.lonlat);
+  const lons = pts.map(p => p[0]), lats = pts.map(p => p[1]);
+  map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 40 });
 }
 
 document.getElementById('modes').addEventListener('click', e => {
@@ -219,15 +264,14 @@ document.getElementById('lines').addEventListener('click', e => {
   net = await (await fetch('network.json')).json();
   net.byLine = {};
   for (const p of net.patterns) { prep(p); (net.byLine[p.line] ??= []).push(p); }
-  const order = s => [s.replace(/\D/g, '') | 0, s];
+  const num = s => s.replace(/\D/g, '') | 0;
   document.getElementById('lines').innerHTML = ['metro', 'tram', 'bus'].map(m => {
-    const ids = Object.keys(net.lines).filter(id => net.lines[id].mode === m)
-      .sort((a, b) => order(a)[0] - order(b)[0] || a.localeCompare(b));
+    const ids = Object.keys(net.lines).filter(id => net.lines[id].mode === m).sort((a, b) => num(a) - num(b) || a.localeCompare(b));
     return `<div><p class="text-sm text-slate-500 mb-1.5 capitalize">${m}</p><div class="flex flex-wrap gap-1.5">${
       ids.map(id => `<button class="line" data-line="${id}" aria-pressed="false" title="${net.lines[id].name}">${badge(id)}</button>`).join('')}</div></div>`;
   }).join('');
   fetch(LAKE).then(r => r.json()).then(d => { lake = d.lines; }).catch(() => {});  // optional: the map works without it
-  if (net.lines[location.hash.slice(1)]) selectLine(location.hash.slice(1));
+  if (net.lines[location.hash.slice(1)]) map.once('load', () => selectLine(location.hash.slice(1)));
   await poll();
   setInterval(poll, POLL);
   requestAnimationFrame(frame);

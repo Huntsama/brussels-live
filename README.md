@@ -4,7 +4,7 @@ Every STIB metro, tram and bus in Brussels on one map, moving in real time, in S
 
 **Live:** https://huntsama.github.io/brussels-live/
 
-![All vehicles](docs/map.png)
+![All vehicles](docs/map.jpg)
 
 ## The problem: STIB has no GPS feed
 
@@ -32,7 +32,17 @@ STIB's open data doesn't say where a vehicle *is*. Every ~20 seconds it says, pe
 
 The page reads STIB's feed straight from the browser (it allows cross-origin requests, no key), so there is no backend.
 
-![One line picked](docs/line.jpg)
+## Drawing
+
+- **MapLibre GL JS** draws the base map (OpenFreeMap vector tiles, no key needed).
+- **deck.gl** draws on the GPU:
+  - each vehicle as a top-down metro (4 cars), tram (3 sections) or bus in its line colour, turned to face along the road;
+  - a fading trail behind each vehicle (`TripsLayer`);
+  - the whole network as faint lines.
+- **Sizes:** zoomed in, vehicles are drawn at roughly real length (metro 92 m, tram 44 m, bus 18 m). Zoomed out, they keep a minimum size so they stay visible.
+- **Tilt:** right-drag (or two fingers) tilts the map.
+
+![Close up, tilted, one tram picked](docs/line.jpg)
 
 ## Fed by Brussels Lakehouse
 
