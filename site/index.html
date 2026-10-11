@@ -31,9 +31,9 @@
 
     <button id="locate" class="w-full rounded-lg bg-slate-900 text-white text-sm font-medium py-2.5 hover:bg-slate-700">Show what's near me</button>
     <section id="near" class="hidden space-y-4">
-      <div class="flex items-baseline">
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 class="text-xs font-medium uppercase tracking-wide text-slate-500">Leaving from near you</h2>
-        <button id="all" class="ml-auto text-sm underline text-slate-600">Show all of Brussels</button>
+        <button id="all" class="ml-auto text-sm underline text-slate-600 whitespace-nowrap">Show all of Brussels</button>
       </div>
       <div id="near-list" class="space-y-4"></div>
       <p class="text-xs text-slate-400">Arrival times from STIB. Your location stays on this device.</p>
@@ -208,7 +208,8 @@ setInterval(() => {
 const WAIT = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes';
 const WALK = 80;  // metres per minute
 let near = null, here = null, nearPats = null, onward = [];
-document.getElementById('locate').addEventListener('click', () => geo.trigger());
+// one big button: find what's near me, and, once in that mode, the way back to the whole city
+document.getElementById('locate').addEventListener('click', () => near ? exitNear() : geo.trigger());
 geo.on('geolocate', e => {
   const first = !here;
   here = [e.coords.latitude, e.coords.longitude];
@@ -227,6 +228,7 @@ function findNear() {
   if (!near.length) near = all.slice(0, 1);
   document.getElementById('near').classList.remove('hidden');
   document.getElementById('browse').classList.add('hidden');
+  document.getElementById('locate').textContent = 'Show all of Brussels';
   if (!near.length) { document.getElementById('near-list').innerHTML = '<p class="text-sm text-slate-500">No STIB stop within 1 km.</p>'; return; }
   // each route through a nearby stop (not ending there): where on it the stop is, and the road onward
   const ids = new Set(near.flatMap(g => g.ids));
@@ -262,12 +264,14 @@ async function arrivals() {
   } catch (e) { console.error(e); }
 }
 setInterval(arrivals, POLL);
-document.getElementById('all').addEventListener('click', () => {
+function exitNear() {
   near = nearPats = null; onward = [];
   document.getElementById('near').classList.add('hidden');
   document.getElementById('browse').classList.remove('hidden');
+  document.getElementById('locate').textContent = "Show what's near me";
   if (line) selectLine(line);
-});
+}
+document.getElementById('all').addEventListener('click', exitNear);
 document.getElementById('near-list').addEventListener('click', e => {
   const b = e.target.closest('[data-line]'); if (b) selectLine(b.dataset.line);  // tap again to see all nearby lines
 });
