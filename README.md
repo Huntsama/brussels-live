@@ -32,6 +32,9 @@ STIB's open data doesn't say where a vehicle *is*. Every ~20 seconds it says, pe
    - Each frame, a vehicle moves towards where it should be now: its last reading plus its own measured speed since (× 0.8, so it would rather lag than run ahead).
    - Gaps close over about 4 s, never faster than a real vehicle (metro 80, tram 55, bus 50 km/h).
    - Only gaps over 600 m (back from another app, a new vehicle) jump instead.
+   - **Stop sync:** when STIB reports a vehicle at a new stop, the dot hurries there in about 1.5 s, so the map re-syncs at every station.
+   - **New vehicles** move at a typical speed for their type (metro 32, tram 18, bus 16 km/h) until they have two readings of their own. One standing at a stop waits.
+   - **Status:** the vehicle panel says what it's doing, in plain words: "Moving, about 24 km/h", "Stopped at Trône" or "Waiting between stops".
    - It stops at the next stop until STIB confirms it has passed, and it never moves backwards.
 5. **Direction:** `directionId` is the terminus. A short-turning vehicle is matched to the route that contains both its stop and its terminus.
 

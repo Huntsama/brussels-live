@@ -68,6 +68,8 @@
 const POLL = 10000;       // STIB's feed changes every ~15-20 s; 10 s catches each change soon after
 const SNAP = 600;         // a gap bigger than this (back from another app, new vehicle) jumps instead of racing
 const MAX_SPEED = { metro: 22, tram: 15, bus: 14 };  // m/s (~80, 55, 50 km/h): a dot never moves faster
+const TYPICAL = { metro: 9, tram: 5, bus: 4.5 };     // m/s, used until a vehicle has two readings of its own
+const RUSH = 40;  // m/s: catching up to a stop STIB just confirmed
 const MAX_AHEAD = 300;    // never predict more than this many metres past the last reading
 const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
 const LAKE = 'https://lakehouse.jwds.me/lines.json';
@@ -152,7 +154,7 @@ function locate(lineId, r) {
   if (!p) return null;
   const i = p.stops.indexOf(stop);
   const cap = p.at[i + 1] ?? p.at[i];  // a vehicle can't be past its next stop until STIB says so
-  return { p, cap, d: Math.min(p.at[i] + r.distanceFromPoint, cap) };
+  return { p, i, cap, d: Math.min(p.at[i] + r.distanceFromPoint, cap) };
 }
 
 // --- STIB gives no vehicle ids: match each new reading to the old one just behind it on the same pattern
@@ -173,8 +175,10 @@ function match(old, fresh) {
       const now = secs > 1 ? Math.min(25, Math.max(0, (v.d - o.raw) / secs)) : o.speed;
       v.speed = v.d === o.raw ? 0 : (o.speed ? (o.speed + now) / 2 : now);
       v.raw = v.d;
+      v.rush = v.i !== o.i;  // STIB says it reached a new stop: hurry the dot there
     }
-    else { v.shown = v.raw = v.d; v.id = nextId++; v.speed = 0; }
+    // new vehicle: standing at a stop (0 m past it) waits, otherwise it moves at a typical speed straight away
+    else { v.shown = v.raw = v.d; v.id = nextId++; v.speed = v.d === v.p.at[v.i] ? 0 : TYPICAL[v.mode]; }
     v.seen = Date.now();
   }
 }
@@ -217,7 +221,9 @@ function frame() {
     const target = Math.min(v.cap, v.d + MAX_AHEAD, v.d + 0.8 * v.speed * (now - v.seen) / 1000);
     const gap = target - v.shown;
     // close a gap over ~4 s, never faster than a real vehicle; never backwards (it waits for the reading instead)
-    if (gap > 0) v.shown += Math.min(gap, dt * Math.min(MAX_SPEED[v.mode], Math.max(0.8 * v.speed, gap / 4)));
+    if (gap > 0) v.shown += Math.min(gap, dt * (v.rush ? Math.max(RUSH, gap / 1.5)
+                                                    : Math.min(MAX_SPEED[v.mode], Math.max(0.8 * v.speed, gap / 4))));
+    if (v.rush && gap < 2) v.rush = false;
     if (line && v.line !== line) continue;
     if (nearPats) {  // near me: only vehicles still coming towards a nearby stop, at most 3 km away
       const i = nearPats.get(v.p);
@@ -347,6 +353,13 @@ function badge(id) {
   return `<span class="inline-flex min-w-[2.25rem] justify-center rounded px-1.5 py-0.5 text-sm font-semibold" style="background:${l.color};color:${l.text}">${id}</span>`;
 }
 
+// plain words for what the vehicle is doing
+function status(v, i) {
+  if (v.speed > 0.5) return `Moving, about ${Math.round(v.speed * 3.6)} km/h`;
+  if (v.shown - v.p.at[i] < 25) return `Stopped at ${stopName(v.p.stops[i])}`;
+  return 'Waiting between stops';
+}
+
 function pick(id) { picked = id; showPicked(); }
 function showPicked() {
   const v = vehicles.find(v => v.id === picked), el = document.getElementById('picked');
@@ -355,6 +368,7 @@ function showPicked() {
   const last = v.p.stops[i], next = v.p.stops[i + 1];
   const html = `<div class="flex items-center gap-2">${badge(v.line)}<span class="font-medium">to ${stopName(v.dest)}</span>
       <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
+    <p class="text-sm font-medium">${status(v, i)}</p>
     <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
     ${usually(v.line)}`;
   if (el.innerHTML !== html) el.innerHTML = html;
