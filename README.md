@@ -27,8 +27,12 @@ STIB's open data doesn't say where a vehicle *is*. Every ~20 seconds it says, pe
    - It then measures how far along that road each stop is.
    - Output: `network.json` (about 250 KB gzipped). It covers 140 routes on 70 lines and 2,150 stops.
 2. **Position:** a vehicle sits at `distance of last stop + metres since`, capped at the next stop, then placed on the road at that distance.
-3. **Identity:** with no vehicle IDs, each new reading is matched to the previous reading just behind it on the same route. It then glides from the old position to the new one over the next 20 seconds. So a dot is about 20 s behind reality but never jumps.
-4. **Direction:** `directionId` is the terminus. A short-turning vehicle is matched to the route that contains both its stop and its terminus.
+3. **Identity:** with no vehicle IDs, each new reading is matched to the previous reading just behind it on the same route.
+4. **Movement:** STIB's feed changes about every 15–20 s. The page checks every 10 s, and only while it's on screen.
+   - On a new reading, the vehicle slides there in 1.5 s.
+   - It then keeps moving at its own measured speed (× 0.8, so it would rather lag than run ahead).
+   - It stops at the next stop until STIB confirms it has passed, and it never moves backwards.
+5. **Direction:** `directionId` is the terminus. A short-turning vehicle is matched to the route that contains both its stop and its terminus.
 
 The page reads STIB's feed straight from the browser (it allows cross-origin requests, no key), so there is no backend.
 

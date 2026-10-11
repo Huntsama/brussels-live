@@ -65,7 +65,9 @@
 </div>
 
 <script>
-const POLL = 20000;
+const POLL = 10000;       // STIB's feed changes every ~15-20 s; 10 s catches each change soon after
+const CATCH_UP = 1500;    // ms to slide to a new reading
+const MAX_AHEAD = 300;    // never predict more than this many metres past the last reading
 const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
 const LAKE = 'https://lakehouse.jwds.me/lines.json';
 const norm = id => id.replace(/[A-Z]$/, '').replace(/^0+/, '');
@@ -100,7 +102,7 @@ const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [],
   getTooltip: ({ object }) => object?.marker && `${object.line} → ${stopName(object.dest)}` });
 map.addControl(overlay);
 
-let net, lake = {}, vehicles = [], updated = 0, line = null, picked = null, nextId = 1;
+let lastFeed = '', net, lake = {}, vehicles = [], updated = 0, line = null, picked = null, nextId = 1;
 const modeOn = { metro: true, tram: true, bus: true };
 
 // --- geometry: metres along a pattern's path -> [lon, lat]
@@ -148,7 +150,8 @@ function locate(lineId, r) {
          || cands[0];
   if (!p) return null;
   const i = p.stops.indexOf(stop);
-  return { p, d: Math.min(p.at[i] + r.distanceFromPoint, p.at[i + 1] ?? p.at[i]) };
+  const cap = p.at[i + 1] ?? p.at[i];  // a vehicle can't be past its next stop until STIB says so
+  return { p, cap, d: Math.min(p.at[i] + r.distanceFromPoint, cap) };
 }
 
 // --- STIB gives no vehicle ids: match each new reading to the old one just behind it on the same pattern
@@ -158,17 +161,30 @@ function match(old, fresh) {
     let best = -1, gap = Infinity;
     pool.forEach((o, k) => {
       if (o.p !== v.p) return;
-      const g = v.d - o.d;
+      const g = v.d - o.raw;
       if (g > -30 && g < 1500 && Math.abs(g) < gap) { gap = Math.abs(g); best = k; }
     });
-    if (best >= 0) { const o = pool.splice(best, 1)[0]; v.from = o.shown ?? o.d; v.id = o.id; }
-    else { v.from = v.d; v.id = nextId++; }
+    if (best >= 0) {
+      const o = pool.splice(best, 1)[0], secs = (Date.now() - o.seen) / 1000;
+      v.id = o.id;
+      v.from = o.shown ?? o.d;
+      // speed from STIB's last two readings, smoothed; 0 when it hasn't moved (waiting at a stop)
+      const now = secs > 1 ? Math.min(25, Math.max(0, (v.d - o.raw) / secs)) : o.speed;
+      v.speed = v.d === o.raw ? 0 : (o.speed ? (o.speed + now) / 2 : now);
+      v.raw = v.d;
+      v.d = Math.max(v.d, v.from);  // never slide backwards when the prediction ran a little ahead
+    }
+    else { v.from = v.raw = v.d; v.id = nextId++; v.speed = 0; }
+    v.seen = Date.now();
   }
 }
 
 async function poll() {
   try {
-    const rows = (await (await fetch(FEED, { cache: 'no-store' })).json()).results;
+    const text = await (await fetch(FEED, { cache: 'no-store' })).text();
+    if (text === lastFeed) return;  // same reading as last time: keep predicting, don't reset speeds
+    lastFeed = text;
+    const rows = JSON.parse(text).results;
     const fresh = [];
     for (const row of rows) {
       if (!net.lines[row.lineid]) continue;
@@ -192,10 +208,13 @@ function stopName(id) { return net.stops[id] ? title(net.stops[id][2]) : id; }
 
 // --- every frame: glide each vehicle from its previous reading to the new one over one poll interval
 function frame() {
-  const k = Math.min(1, (Date.now() - updated) / POLL);
+  const now = Date.now();
   const shown = [];
   for (const v of vehicles) {
-    v.shown = v.from + (v.d - v.from) * k;
+    // slide to the reading, then keep going at the vehicle's own speed until the next reading
+    const age = now - v.seen;
+    v.shown = Math.min(v.cap, v.d + MAX_AHEAD,
+      v.from + (v.d - v.from) * Math.min(1, age / CATCH_UP) + 0.8 * v.speed * age / 1000);  // 0.8: rather a bit behind than ahead
     if (line && v.line !== line) continue;
     if (nearPats) {  // near me: only vehicles still coming towards a nearby stop, at most 3 km away
       const i = nearPats.get(v.p);
@@ -371,7 +390,8 @@ document.getElementById('lines').addEventListener('click', e => {
   fetch(LAKE).then(r => r.json()).then(d => { lake = d.lines; }).catch(() => {});  // optional: the map works without it
   if (net.lines[location.hash.slice(1)]) map.once('load', () => selectLine(location.hash.slice(1)));
   await poll();
-  setInterval(poll, POLL);
+  setInterval(() => { if (!document.hidden) poll(); }, POLL);  // no data used while the phone is locked or in another app
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   requestAnimationFrame(frame);
 })();
 </script>
