@@ -137,7 +137,7 @@ const title = s => s.toLowerCase().replace(/(^|[\s\-'(])\S/g, c => c.toUpperCase
 function stopName(id) { return net.stops[id] ? title(net.stops[id][2]) : id; }
 
 // --- every frame: advance the estimate, then draw
-let lastFrame = Date.now();
+let lastFrame = Date.now(), staticKey = '', staticLayers = [], trailsAt = 0, trailsLayer = null;
 function frame() {
   const now = Date.now(), dt = Math.min(2, (now - lastFrame) / 1000);  // slow phones get fewer frames, not slower vehicles
   lastFrame = now;
@@ -151,14 +151,15 @@ function frame() {
     } else if (!modeOn[v.mode]) continue;
     v.pos = pointAt(v.p, v.shown);
     v.angle = angleAt(v.p, v.shown);
-    v.t = trail(v.p, v.shown - 160, v.shown);
     v.marker = true;
     shown.push(v);
   }
   const sel = vehicles.find(v => v.id === picked);
   const mpp = 78271.517 * Math.cos(50.85 * Math.PI / 180) / 2 ** map.getZoom(), bearing = map.getBearing();
   const color = id => rgb(net.lines[id].color);
-  overlay.setProps({ layers: [
+  // the map itself only changes when the selection does: build those layers once, not 60 times a second
+  const key = `${line}|${!!nearPats}|${near?.length}|${onward.length}`;
+  if (key !== staticKey) { staticKey = key; staticLayers = [
     nearPats ? new deck.PathLayer({ id: 'onward', data: onward.filter(o => !line || o.line === line), getPath: o => o.path,
         widthUnits: 'pixels', getWidth: 4, getColor: o => [...color(o.line), 170], capRounded: true, jointRounded: true })
     : new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
@@ -170,9 +171,19 @@ function frame() {
       fontFamily: 'ui-sans-serif, system-ui, sans-serif' }),
     near && new deck.ScatterplotLayer({ id: 'near-stops', data: near.flatMap(g => g.ids), getPosition: id => [net.stops[id][1], net.stops[id][0]],
       getRadius: 6, radiusUnits: 'pixels', getFillColor: [255, 255, 255], getLineColor: [15, 23, 42], stroked: true, lineWidthMinPixels: 2 }),
-    new deck.TripsLayer({ id: 'trails', data: shown, getPath: v => v.t.path,
-      getTimestamps: v => v.t.ts, getColor: v => color(v.line), currentTime: 0, trailLength: 160,
-      widthMinPixels: 3, capRounded: true, jointRounded: true }),
+  ]; }
+  // trails: the costly layer (a path per vehicle), rebuilt 4 times a second; as long as ~30 px so motion shows when zoomed out
+  if (now - trailsAt > 250) {
+    trailsAt = now;
+    const len = Math.max(120, 30 * mpp);
+    for (const v of shown) v.t = trail(v.p, v.shown - len, v.shown);
+    trailsLayer = new deck.TripsLayer({ id: 'trails', data: shown.slice(), getPath: v => v.t.path,
+      getTimestamps: v => v.t.ts, getColor: v => color(v.line), currentTime: 0, trailLength: len,
+      widthMinPixels: 3, capRounded: true, jointRounded: true });
+  }
+  overlay.setProps({ layers: [
+    ...staticLayers,
+    trailsLayer,
     sel && modeOn[sel.mode] && new deck.ScatterplotLayer({ id: 'picked', data: [sel], getPosition: v => v.pos,
       getRadius: 60, radiusMinPixels: 22, stroked: true, filled: true, getFillColor: [15, 23, 42, 25],
       getLineColor: [15, 23, 42], lineWidthMinPixels: 2 }),
