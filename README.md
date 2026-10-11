@@ -2,9 +2,22 @@
 
 Every STIB metro, tram and bus in Brussels on one map, moving in real time, in STIB's own line colours. Plus what's arriving at the stops near you.
 
-**Live:** https://huntsama.github.io/brussels-live/
+**Try it:** https://huntsama.github.io/brussels-live/ (works on a phone; "Near me" needs location permission)
 
-![All vehicles](docs/map.jpg)
+![All vehicles in Brussels](docs/map.jpg)
+
+| Zoomed in: vehicles at real length, tilted map | Near me: what leaves from the closest stops |
+|---|---|
+| ![Vehicles close up](docs/vehicles.jpg) | ![Near me](docs/near.jpg) |
+
+## Stack
+
+- **Data:** STIB-MIVB open data (live vehicle positions and arrival predictions, stop lists, GTFS timetable), all free and keyless. No backend: the browser reads the feeds directly.
+- **Build:** Python 3 (standard library) joins stops, routes and timetable into `network.json`; runs weekly in GitHub Actions.
+- **Page:** MapLibre GL JS + OpenFreeMap tiles, deck.gl (WebGL) for vehicles and trails, Tailwind CSS, Geolocation API, web app manifest.
+- **Estimation:** `site/estimator.js`, plain JavaScript, with an offline evaluation loop in Node (`tools/`).
+- **Quality:** pytest, `node --test`, GitHub Actions, GitHub Pages.
+- Sister project: [Brussels Lakehouse](https://github.com/Huntsama/brussels-lakehouse), which records the same feeds every 5 minutes on Azure and feeds this map its "usually late" numbers.
 
 ## The problem: STIB has no GPS feed
 
@@ -51,8 +64,6 @@ The page reads STIB's feed straight from the browser (it allows cross-origin req
 - **Tap a row** to keep only that line. "Show all of Brussels" brings the full map back.
 - **Install as an app:** a web app manifest lets you add it to your phone's home screen, where it opens full screen like an app.
 
-![Near me](docs/near.jpg)
-
 ## Drawing
 
 - **MapLibre GL JS** draws the base map (OpenFreeMap vector tiles, no key needed).
@@ -62,8 +73,6 @@ The page reads STIB's feed straight from the browser (it allows cross-origin req
   - the whole network as faint lines.
 - **Sizes:** zoomed in, vehicles are drawn at roughly real length (metro 92 m, tram 44 m, bus 18 m). Zoomed out, they keep a minimum size so they stay visible.
 - **Tilt:** right-drag (or two fingers) tilts the map.
-
-![Close up, tilted, one tram picked](docs/line.jpg)
 
 ## How good is the estimate? Measured, not guessed
 
@@ -106,4 +115,6 @@ cd site && python3 -m http.server
 - About 12 routes currently run on roadworks diversions that the timetable shape doesn't match. Those are drawn as straight lines between stops.
 - `M6`, `T39` and `T81` are replacement buses for metro 6 and trams 39 and 81, so they're shown as buses.
 
-Developed by [Jawad Shaissah](https://www.jwds.me). Data: STIB-MIVB open data. Map © OpenStreetMap contributors.
+## Licence
+
+MIT. Developed by [Jawad Shaissah](https://www.jwds.me). Data: STIB-MIVB open data. Map: OpenFreeMap, OpenMapTiles, © OpenStreetMap contributors.
