@@ -35,8 +35,12 @@ The page reads STIB's feed straight from the browser (it allows cross-origin req
 ## Near me
 
 - **Your location:** "Show what's near me" uses the browser's Geolocation API through MapLibre's locate control (blue dot, accuracy circle, follow mode). It **stays on the device**: no server, nothing stored.
-- **Nearby stops:** stops within 500 m, grouped by name (one name, several platforms).
-- **Arrival times:** for each nearby stop, the next two arrivals per line and direction come from STIB's own `WaitingTimes` predictions and refresh every 20 s. Tap a row to show that line on the map.
+- **Nearby stops:** the 2 closest stops within 300 m (or the nearest one within 1 km), grouped by name, with walking time.
+- **"Leaving from near you":** one row per line and direction (`71 → Delta  6 min · 15`), from STIB's own `WaitingTimes` predictions, refreshed every 20 s.
+- **A calm map:** the rest of the city is hidden. You see only:
+  - the road each of those lines takes onward from your stop, labelled with where it ends;
+  - the vehicles still coming towards you.
+- **Tap a row** to keep only that line. "Show all of Brussels" brings the full map back.
 - **Install as an app:** a web app manifest lets you add it to your phone's home screen, where it opens full screen like an app.
 
 ![Near me](docs/near.jpg)

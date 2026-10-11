@@ -29,24 +29,29 @@
     </header>
 
     <button id="locate" class="w-full rounded-lg bg-slate-900 text-white text-sm font-medium py-2.5 hover:bg-slate-700">Show what's near me</button>
-    <section id="near" class="hidden space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-slate-500">Near you</h2>
-      <div id="near-list" class="space-y-3"></div>
+    <section id="near" class="hidden space-y-4">
+      <div class="flex items-baseline">
+        <h2 class="text-xs font-medium uppercase tracking-wide text-slate-500">Leaving from near you</h2>
+        <button id="all" class="ml-auto text-sm underline text-slate-600">Show all of Brussels</button>
+      </div>
+      <div id="near-list" class="space-y-4"></div>
       <p class="text-xs text-slate-400">Arrival times from STIB. Your location stays on this device.</p>
     </section>
 
+    <section id="picked" class="hidden rounded-lg border border-slate-200 p-4 space-y-2"></section>
+
+    <div id="browse" class="space-y-5">
     <div class="flex gap-2" id="modes">
       <button class="chip px-3 py-1.5 rounded-full border border-slate-300 text-sm" aria-pressed="true" data-mode="metro">Metro <span class="text-slate-500" data-n="metro"></span></button>
       <button class="chip px-3 py-1.5 rounded-full border border-slate-300 text-sm" aria-pressed="true" data-mode="tram">Tram <span class="text-slate-500" data-n="tram"></span></button>
       <button class="chip px-3 py-1.5 rounded-full border border-slate-300 text-sm" aria-pressed="true" data-mode="bus">Bus <span class="text-slate-500" data-n="bus"></span></button>
     </div>
 
-    <section id="picked" class="hidden rounded-lg border border-slate-200 p-4 space-y-2"></section>
-
     <section>
       <h2 class="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">Pick a line</h2>
       <div id="lines" class="space-y-3"></div>
     </section>
+    </div>
 
     <details class="text-sm text-slate-600">
       <summary class="cursor-pointer font-medium text-slate-900">How positions are worked out</summary>
@@ -191,7 +196,11 @@ function frame() {
   const shown = [];
   for (const v of vehicles) {
     v.shown = v.from + (v.d - v.from) * k;
-    if (!modeOn[v.mode] || (line && v.line !== line)) continue;
+    if (line && v.line !== line) continue;
+    if (nearPats) {  // near me: only vehicles still coming towards a nearby stop, at most 3 km away
+      const i = nearPats.get(v.p);
+      if (i === undefined || v.shown > v.p.at[i] + 20 || v.shown < v.p.at[i] - 3000) continue;
+    } else if (!modeOn[v.mode]) continue;
     v.pos = pointAt(v.p, v.shown);
     v.angle = angleAt(v.p, v.shown);
     v.t = trail(v.p, v.shown - 160, v.shown);
@@ -202,9 +211,15 @@ function frame() {
   const mpp = 78271.517 * Math.cos(50.85 * Math.PI / 180) / 2 ** map.getZoom(), bearing = map.getBearing();
   const color = id => rgb(net.lines[id].color);
   overlay.setProps({ layers: [
-    new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
+    nearPats ? new deck.PathLayer({ id: 'onward', data: onward.filter(o => !line || o.line === line), getPath: o => o.path,
+        widthUnits: 'pixels', getWidth: 4, getColor: o => [...color(o.line), 170], capRounded: true, jointRounded: true })
+    : new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
       getWidth: p => p.line === line ? 5 : 2, getColor: p => [...color(p.line), line ? (p.line === line ? 120 : 15) : 45],
       updateTriggers: { getWidth: line, getColor: line } }),
+    nearPats && new deck.TextLayer({ id: 'ends', data: onward.filter(o => !line || o.line === line), getPosition: o => o.path.at(-1),
+      getText: o => `${o.line} → ${stopName(o.p.to)}`, characterSet: 'auto', getSize: 13, getColor: [15, 23, 42],
+      background: true, getBackgroundColor: [255, 255, 255, 230], backgroundPadding: [4, 2], fontWeight: 600,
+      fontFamily: 'ui-sans-serif, system-ui, sans-serif' }),
     near && new deck.ScatterplotLayer({ id: 'near-stops', data: near.flatMap(g => g.ids), getPosition: id => [net.stops[id][1], net.stops[id][0]],
       getRadius: 6, radiusUnits: 'pixels', getFillColor: [255, 255, 255], getLineColor: [15, 23, 42], stroked: true, lineWidthMinPixels: 2 }),
     new deck.TripsLayer({ id: 'trails', data: shown, getPath: v => v.t.path,
@@ -228,9 +243,10 @@ setInterval(() => {
   if (updated) document.getElementById('ago').textContent = `· updated ${Math.round((Date.now() - updated) / 1000)}s ago`;
 }, 1000);
 
-// --- near me: stops within 500 m of the user, grouped by name, with STIB's own arrival predictions
+// --- near me: the 2 closest stops (300 m, else the nearest within 1 km), what leaves from them and where it goes
 const WAIT = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes';
-let near = null, here = null;
+const WALK = 80;  // metres per minute
+let near = null, here = null, nearPats = null, onward = [];
 document.getElementById('locate').addEventListener('click', () => geo.trigger());
 geo.on('geolocate', e => {
   const first = !here;
@@ -241,13 +257,25 @@ function findNear() {
   const byName = {};
   for (const [id, s] of Object.entries(net.stops)) {
     const d = metres(here, s);
-    if (d > 500) continue;
+    if (d > 1000) continue;
     const g = byName[s[2]] ??= { name: s[2], ids: [], d };
     g.ids.push(id); g.d = Math.min(g.d, d);
   }
-  near = Object.values(byName).sort((a, b) => a.d - b.d).slice(0, 4);
+  const all = Object.values(byName).sort((a, b) => a.d - b.d);
+  near = all.filter(g => g.d <= 300).slice(0, 2);
+  if (!near.length) near = all.slice(0, 1);
   document.getElementById('near').classList.remove('hidden');
-  if (!near.length) { document.getElementById('near-list').innerHTML = '<p class="text-sm text-slate-500">No STIB stop within 500 m.</p>'; return; }
+  document.getElementById('browse').classList.add('hidden');
+  if (!near.length) { document.getElementById('near-list').innerHTML = '<p class="text-sm text-slate-500">No STIB stop within 1 km.</p>'; return; }
+  // each route through a nearby stop (not ending there): where on it the stop is, and the road onward
+  const ids = new Set(near.flatMap(g => g.ids));
+  nearPats = new Map();
+  for (const p of net.patterns) {
+    const i = p.stops.findIndex((s, k) => ids.has(s) && k < p.stops.length - 1);
+    if (i >= 0) nearPats.set(p, i);
+  }
+  onward = [...nearPats].map(([p, i]) => ({ p, line: p.line, path: trail(p, p.at[i], p.cum.at(-1)).path }));
+  if (line) selectLine(line);
   arrivals();
 }
 async function arrivals() {
@@ -264,17 +292,23 @@ async function arrivals() {
         .sort((a, b) => a.min - b.min);
       // one row per line and direction, with its next two arrivals
       const rowsHtml = Object.values(next.reduce((acc, t) => ((acc[t.line + t.to] ??= { ...t, mins: [] }).mins.push(t.min), acc), {}))
-        .slice(0, 6).map(t => `<button class="w-full flex items-center gap-2 text-left text-sm py-1" data-line="${t.line}">${badge(t.line)}
-            <span class="truncate">${title(t.to)}</span>
-            <span class="ml-auto shrink-0 tabular-nums font-medium">${t.mins.slice(0, 2).map(m => m === 0 ? 'now' : m + ' min').join(' · ')}</span></button>`).join('');
-      return `<div><p class="text-sm"><b>${title(g.name)}</b> <span class="text-slate-500">· ${Math.round(g.d / 10) * 10} m</span></p>
-        ${rowsHtml || '<p class="text-sm text-slate-500">No arrivals announced.</p>'}</div>`;
+        .slice(0, 8).map(t => `<button class="w-full flex items-center gap-2 text-left text-sm py-1.5 border-t border-slate-100" data-line="${t.line}">${badge(t.line)}
+            <span class="truncate">→ ${title(t.to)}</span>
+            <span class="ml-auto shrink-0 text-right tabular-nums"><b>${t.mins[0] === 0 ? 'now' : t.mins[0] + ' min'}</b>${t.mins[1] !== undefined ? `<span class="text-slate-400"> · ${t.mins[1]}</span>` : ''}</span></button>`).join('');
+      return `<div><p class="text-sm mb-1"><b>${title(g.name)}</b> <span class="text-slate-500">· ${Math.round(g.d / 10) * 10} m, ${Math.max(1, Math.round(g.d / WALK))} min walk</span></p>
+        ${rowsHtml || '<p class="text-sm text-slate-500">Nothing announced right now.</p>'}</div>`;
     }).join('');
   } catch (e) { console.error(e); }
 }
 setInterval(arrivals, POLL);
+document.getElementById('all').addEventListener('click', () => {
+  near = nearPats = null; onward = [];
+  document.getElementById('near').classList.add('hidden');
+  document.getElementById('browse').classList.remove('hidden');
+  if (line) selectLine(line);
+});
 document.getElementById('near-list').addEventListener('click', e => {
-  const b = e.target.closest('[data-line]'); if (b && line !== b.dataset.line) selectLine(b.dataset.line);
+  const b = e.target.closest('[data-line]'); if (b) selectLine(b.dataset.line);  // tap again to see all nearby lines
 });
 
 function usually(id) {
@@ -309,7 +343,7 @@ function selectLine(id) {
   line = line === id ? null : id;
   document.querySelectorAll('.line').forEach(b => b.setAttribute('aria-pressed', b.dataset.line === line));
   history.replaceState(null, '', line ? '#' + line : location.pathname);
-  if (!line) return;
+  if (!line || nearPats) return;
   const pts = net.byLine[line].flatMap(p => p.lonlat);
   const lons = pts.map(p => p[0]), lats = pts.map(p => p[1]);
   map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 40 });
