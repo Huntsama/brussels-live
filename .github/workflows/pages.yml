@@ -1,5 +1,6 @@
 name: pages
-# Rebuild the network weekly (STIB changes routes for works) and on every push.
+# Rebuild the network weekly (STIB changes routes for works) and on every push. live.jwds.me is published
+# separately by the brussels-lakehouse repo's publish-live workflow (same hosting as the lakehouse).
 on:
   push:
     branches: [main]

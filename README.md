@@ -2,7 +2,7 @@
 
 Every STIB metro, tram and bus in Brussels on one map, moving in real time, in STIB's own line colours. Plus what's arriving at the stops near you.
 
-**Try it:** https://huntsama.github.io/brussels-live/ (works on a phone; "Near me" needs location permission)
+**Try it:** https://live.jwds.me (works on a phone; "Near me" needs location permission). Also at https://huntsama.github.io/brussels-live/.
 
 ![All vehicles in Brussels](docs/map.jpg)
 
