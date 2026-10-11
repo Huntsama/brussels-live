@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@9.1.14/dist.min.js"></script>
+<script src="estimator.js"></script>
 <style>
   .chip[aria-pressed="false"] { opacity: .35; }
   .line[aria-pressed="true"] { outline: 2px solid #0f172a; outline-offset: 2px; }
@@ -66,14 +67,9 @@
 
 <script>
 const POLL = 10000;       // STIB's feed changes every ~15-20 s; 10 s catches each change soon after
-const SNAP = 600;         // a gap bigger than this (back from another app, new vehicle) jumps instead of racing
-const MAX_SPEED = { metro: 22, tram: 15, bus: 14 };  // m/s (~80, 55, 50 km/h): a dot never moves faster
-const TYPICAL = { metro: 9, tram: 5, bus: 4.5 };     // m/s, used until a vehicle has two readings of its own
-const RUSH = 40;  // m/s: catching up to a stop STIB just confirmed
-const MAX_AHEAD = 300;    // never predict more than this many metres past the last reading
 const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
 const LAKE = 'https://lakehouse.jwds.me/lines.json';
-const norm = id => id.replace(/[A-Z]$/, '').replace(/^0+/, '');
+const { norm, metres, seg, pointAt } = Estimator;
 const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
 
 // --- vehicles seen from above, front pointing up. Real lengths in metres; never smaller than minPx on screen.
@@ -105,30 +101,9 @@ const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [],
   getTooltip: ({ object }) => object?.marker && `${object.line} → ${stopName(object.dest)}` });
 map.addControl(overlay);
 
-let lastFeed = '', net, lake = {}, vehicles = [], updated = 0, line = null, picked = null, nextId = 1;
+let lastFeed = '', net, est, lake = {}, vehicles = [], updated = 0, line = null, picked = null;
 const modeOn = { metro: true, tram: true, bus: true };
 
-// --- geometry: metres along a pattern's path -> [lon, lat]
-function metres(a, b) {
-  const x = (b[1] - a[1]) * Math.cos((a[0] + b[0]) * Math.PI / 360);
-  return Math.hypot(x, b[0] - a[0]) * 111320;
-}
-function prep(p) {
-  p.cum = [0];
-  for (let i = 1; i < p.path.length; i++) p.cum.push(p.cum[i - 1] + metres(p.path[i - 1], p.path[i]));
-  p.lonlat = p.path.map(([la, lo]) => [lo, la]);
-}
-function seg(p, d) {
-  const c = p.cum; let lo = 0, hi = c.length - 1;
-  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
-  return [lo, hi];
-}
-function pointAt(p, d) {
-  d = Math.max(0, Math.min(d, p.cum[p.cum.length - 1]));
-  const [lo, hi] = seg(p, d), c = p.cum, t = c[hi] === c[lo] ? 0 : (d - c[lo]) / (c[hi] - c[lo]);
-  const a = p.lonlat[lo], b = p.lonlat[hi];
-  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-}
 // heading in deck.gl terms: degrees counter-clockwise from north
 function angleAt(p, d) {
   const a = pointAt(p, d - 8), b = pointAt(p, d + 8);
@@ -144,61 +119,12 @@ function trail(p, from, to) {
   return { path, ts };
 }
 
-// --- which pattern a reading belongs to: the one ending at its destination, else one that has the stop
-function locate(lineId, r) {
-  const stop = norm(r.pointId), dest = norm(r.directionId);
-  const cands = (net.byLine[lineId] || []).filter(p => p.stops.includes(stop));
-  const p = cands.find(p => p.to === dest)
-         || cands.find(p => p.stops.indexOf(dest) > p.stops.indexOf(stop))
-         || cands[0];
-  if (!p) return null;
-  const i = p.stops.indexOf(stop);
-  const cap = p.at[i + 1] ?? p.at[i];  // a vehicle can't be past its next stop until STIB says so
-  return { p, i, cap, d: Math.min(p.at[i] + r.distanceFromPoint, cap) };
-}
-
-// --- STIB gives no vehicle ids: match each new reading to the old one just behind it on the same pattern
-function match(old, fresh) {
-  const pool = old.slice();
-  for (const v of fresh) {
-    let best = -1, gap = Infinity;
-    pool.forEach((o, k) => {
-      if (o.p !== v.p) return;
-      const g = v.d - o.raw;
-      if (g > -30 && g < 1500 && Math.abs(g) < gap) { gap = Math.abs(g); best = k; }
-    });
-    if (best >= 0) {
-      const o = pool.splice(best, 1)[0], secs = (Date.now() - o.seen) / 1000;
-      v.id = o.id;
-      v.shown = v.d - o.shown > SNAP ? v.d : o.shown;  // keep drawing from where it was
-      // speed from STIB's last two readings, smoothed; 0 when it hasn't moved (waiting at a stop)
-      const now = secs > 1 ? Math.min(25, Math.max(0, (v.d - o.raw) / secs)) : o.speed;
-      v.speed = v.d === o.raw ? 0 : (o.speed ? (o.speed + now) / 2 : now);
-      v.raw = v.d;
-      v.rush = v.i !== o.i;  // STIB says it reached a new stop: hurry the dot there
-    }
-    // new vehicle: standing at a stop (0 m past it) waits, otherwise it moves at a typical speed straight away
-    else { v.shown = v.raw = v.d; v.id = nextId++; v.speed = v.d === v.p.at[v.i] ? 0 : TYPICAL[v.mode]; }
-    v.seen = Date.now();
-  }
-}
-
 async function poll() {
   try {
     const text = await (await fetch(FEED, { cache: 'no-store' })).text();
     if (text === lastFeed) return;  // same reading as last time: keep predicting, don't reset speeds
     lastFeed = text;
-    const rows = JSON.parse(text).results;
-    const fresh = [];
-    for (const row of rows) {
-      if (!net.lines[row.lineid]) continue;
-      for (const r of JSON.parse(row.vehiclepositions)) {
-        const loc = locate(row.lineid, r);
-        if (loc) fresh.push({ line: row.lineid, mode: net.lines[row.lineid].mode, dest: norm(r.directionId), ...loc });
-      }
-    }
-    match(vehicles, fresh);
-    vehicles = fresh;
+    vehicles = est.update(JSON.parse(text).results);
     updated = Date.now();
     const n = { metro: 0, tram: 0, bus: 0 };
     vehicles.forEach(v => n[v.mode]++);
@@ -210,20 +136,14 @@ async function poll() {
 const title = s => s.toLowerCase().replace(/(^|[\s\-'(])\S/g, c => c.toUpperCase());
 function stopName(id) { return net.stops[id] ? title(net.stops[id][2]) : id; }
 
-// --- every frame: move each dot towards where the vehicle should be now, at a believable speed
+// --- every frame: advance the estimate, then draw
 let lastFrame = Date.now();
 function frame() {
   const now = Date.now(), dt = Math.min(2, (now - lastFrame) / 1000);  // slow phones get fewer frames, not slower vehicles
   lastFrame = now;
+  est.advance(now, dt);
   const shown = [];
   for (const v of vehicles) {
-    // target: last reading + its own speed since (x0.8: rather a bit behind than ahead), not past the next stop
-    const target = Math.min(v.cap, v.d + MAX_AHEAD, v.d + 0.8 * v.speed * (now - v.seen) / 1000);
-    const gap = target - v.shown;
-    // close a gap over ~4 s, never faster than a real vehicle; never backwards (it waits for the reading instead)
-    if (gap > 0) v.shown += Math.min(gap, dt * (v.rush ? Math.max(RUSH, gap / 1.5)
-                                                    : Math.min(MAX_SPEED[v.mode], Math.max(0.8 * v.speed, gap / 4))));
-    if (v.rush && gap < 2) v.rush = false;
     if (line && v.line !== line) continue;
     if (nearPats) {  // near me: only vehicles still coming towards a nearby stop, at most 3 km away
       const i = nearPats.get(v.p);
@@ -396,8 +316,7 @@ document.getElementById('lines').addEventListener('click', e => {
 
 (async () => {
   net = await (await fetch('network.json')).json();
-  net.byLine = {};
-  for (const p of net.patterns) { prep(p); (net.byLine[p.line] ??= []).push(p); }
+  est = Estimator.create(net);
   const num = s => s.replace(/\D/g, '') | 0;
   document.getElementById('lines').innerHTML = ['metro', 'tram', 'bus'].map(m => {
     const ids = Object.keys(net.lines).filter(id => net.lines[id].mode === m).sort((a, b) => num(a) - num(b) || a.localeCompare(b));

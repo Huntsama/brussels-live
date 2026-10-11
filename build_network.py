@@ -87,6 +87,18 @@ def thin(path, step=12):
     return out + [path[-1]]
 
 
+def scheduled_seconds(read, routes):
+    """Median timetable seconds from each stop to the next, per line: (line, stop, next) -> seconds."""
+    line_of = {t["trip_id"]: routes[t["route_id"]]["route_short_name"] for t in read("trips.txt")}
+    sec = lambda t: sum(int(x) * k for x, k in zip(t.split(":"), (3600, 60, 1)))
+    times, prev = defaultdict(list), None
+    for r in read("stop_times.txt"):
+        if prev and prev["trip_id"] == r["trip_id"]:
+            times[(line_of[r["trip_id"]], norm(prev["stop_id"]), norm(r["stop_id"]))].append(sec(r["arrival_time"]) - sec(prev["departure_time"]))
+        prev = r
+    return {k: sorted(v)[len(v) // 2] for k, v in times.items()}
+
+
 def build():
     stops = {}
     for r in pages("StopDetails"):
@@ -109,6 +121,7 @@ def build():
             shapes[r["shape_id"]].append((int(r["shape_pt_sequence"]), float(r["shape_pt_lat"]), float(r["shape_pt_lon"])))
     shapes = {k: [(la, lo) for _, la, lo in sorted(v)] for k, v in shapes.items()}
 
+    secs = scheduled_seconds(read, routes)
     lines = {r["route_short_name"]: {"color": "#" + r["route_color"], "text": "#" + r["route_text_color"],
                                      "mode": MODES.get(r["route_type"], "bus"), "name": r["route_long_name"].title()
                                      # "M6", "T39": buses standing in for a metro or tram during works
@@ -134,7 +147,10 @@ def build():
         else:
             path, rough = pts, rough + [(r["lineid"], round(cands[0][0]) if cands else None)]
         path = thin([pts[0], *path, pts[-1]])
-        patterns.append({"line": r["lineid"], "to": ids[-1], "stops": ids, "at": along(path, pts),
+        at = along(path, pts)
+        # timetable seconds per segment (3% unmatched: assume 16 km/h, the network median)
+        sched = [secs.get((r["lineid"], a, b)) or max(1, round((db - da) / 4.4)) for a, b, da, db in zip(ids, ids[1:], at, at[1:])]
+        patterns.append({"line": r["lineid"], "to": ids[-1], "stops": ids, "at": at, "secs": sched,
                          "path": [[round(la, 5), round(lo, 5)] for la, lo in path]})
 
     used = {i for p in patterns for i in p["stops"]}

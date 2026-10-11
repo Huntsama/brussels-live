@@ -29,11 +29,11 @@ STIB's open data doesn't say where a vehicle *is*. Every ~20 seconds it says, pe
 2. **Position:** a vehicle sits at `distance of last stop + metres since`, capped at the next stop, then placed on the road at that distance.
 3. **Identity:** with no vehicle IDs, each new reading is matched to the previous reading just behind it on the same route.
 4. **Movement:** STIB's feed changes about every 15–20 s. The page checks every 10 s, and only while it's on screen.
-   - Each frame, a vehicle moves towards where it should be now: its last reading plus its own measured speed since (× 0.8, so it would rather lag than run ahead).
-   - Gaps close over about 4 s, never faster than a real vehicle (metro 80, tram 55, bus 50 km/h).
+   - Each frame, a vehicle moves towards where it should be now: its last reading plus its own measured speed since (× 0.9, so it would rather lag than run ahead).
+   - Gaps close over about 2 s, never faster than a real vehicle (metro 80, tram 55, bus 50 km/h).
    - Only gaps over 600 m (back from another app, a new vehicle) jump instead.
    - **Stop sync:** when STIB reports a vehicle at a new stop, the dot hurries there in about 1.5 s, so the map re-syncs at every station.
-   - **New vehicles** move at a typical speed for their type (metro 32, tram 18, bus 16 km/h) until they have two readings of their own. One standing at a stop waits.
+   - **New vehicles** move at 1.2× the timetable's average speed for that segment until they have two readings of their own. One standing at a stop waits.
    - **Status:** the vehicle panel says what it's doing, in plain words: "Moving, about 24 km/h", "Stopped at Trône" or "Waiting between stops".
    - It stops at the next stop until STIB confirms it has passed, and it never moves backwards.
 5. **Direction:** `directionId` is the terminus. A short-turning vehicle is matched to the route that contains both its stop and its terminus.
@@ -64,6 +64,30 @@ The page reads STIB's feed straight from the browser (it allows cross-origin req
 - **Tilt:** right-drag (or two fingers) tilts the map.
 
 ![Close up, tilted, one tram picked](docs/line.jpg)
+
+## How good is the estimate? Measured, not guessed
+
+`tools/` holds a small evaluation loop, so every change to the estimator is scored on real data instead of eyeballed:
+
+1. `record.js` saves STIB's feed for a few minutes (one line per change).
+2. `replay.js` runs the estimator (`site/estimator.js`, the same code the page uses) over the recording and, at every real reading, measures how far the dot was from where the vehicle actually was.
+3. `fit.js` turns a recording into rows of *state → what happened next*, to fit the speed model.
+
+What the data showed, and what changed because of it:
+
+- **A line's positions refresh every ~31 s, while the feed as a whole changes every ~15 s.** In 44% of feeds a line's data is a repeat. The first version read a repeat as "the vehicle stopped", which froze dots and made them lag. The estimator now detects, per line, whether STIB refreshed the data and keeps predicting when it didn't.
+- **The timetable knows each segment's speed.** GTFS `stop_times` gives a scheduled time between every pair of consecutive stops (2,958 of the 3,035 segments matched), so a vehicle starts at that segment's speed instead of a fixed guess per mode.
+- **Constants were tuned by grid search** on one recording (`PARAMS='{"AHEAD":1}' node tools/replay.js …`) and checked on a second, unseen one.
+
+Result on the unseen recording (6 minutes, 5,462 real readings):
+
+| | Old | Now |
+|---|---|---|
+| Typical error (median) | 48 m | 46 m |
+| Bias (negative = dot behind the vehicle) | −24 m | +0 m |
+| Readings where the dot was >50 m behind | 30% | 23% |
+
+The remaining ~45 m is mostly what can't be known from this feed: a vehicle's reading is up to 30 s old, and nothing says how long it will wait at a stop or a light. The next signal to add is STIB's own arrival predictions (`WaitingTimes`), which say when a vehicle will reach its next stop.
 
 ## Fed by Brussels Lakehouse
 
