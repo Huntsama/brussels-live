@@ -98,7 +98,7 @@ const geo = new maplibregl.GeolocateControl({ positionOptions: { enableHighAccur
   fitBoundsOptions: { maxZoom: 16 } });
 map.addControl(geo, 'top-right');
 const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [],
-  getTooltip: ({ object }) => object?.marker && `${object.line} → ${stopName(object.dest)}` });
+  getTooltip: ({ object }) => object?.marker && `${object.line} → ${destName(object)}` });
 map.addControl(overlay);
 
 let lastFeed = '', net, est, lake = {}, vehicles = [], updated = 0, line = null, picked = null;
@@ -135,6 +135,8 @@ async function poll() {
 
 const title = s => s.toLowerCase().replace(/(^|[\s\-'(])\S/g, c => c.toUpperCase());
 function stopName(id) { return net.stops[id] ? title(net.stops[id][2]) : id; }
+// STIB's directionId is sometimes a terminus id missing from StopDetails: fall back to the route's last stop
+const destName = v => stopName(net.stops[v.dest] ? v.dest : v.p.to);
 
 // --- every frame: advance the estimate, then draw
 let lastFrame = Date.now(), staticKey = '', staticLayers = [], trailsAt = 0, trailsLayer = null;
@@ -297,7 +299,7 @@ function showPicked() {
   if (!v) { el.classList.add('hidden'); picked = null; return; }
   const i = v.p.stops.findIndex((s, k) => v.p.at[k + 1] === undefined || v.p.at[k + 1] > v.shown);
   const last = v.p.stops[i], next = v.p.stops[i + 1];
-  const html = `<div class="flex items-center gap-2">${badge(v.line)}<span class="font-medium">to ${stopName(v.dest)}</span>
+  const html = `<div class="flex items-center gap-2">${badge(v.line)}<span class="font-medium">to ${destName(v)}</span>
       <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
     <p class="text-sm font-medium">${status(v, i)}</p>
     <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
