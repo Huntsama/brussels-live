@@ -66,7 +66,8 @@
 
 <script>
 const POLL = 10000;       // STIB's feed changes every ~15-20 s; 10 s catches each change soon after
-const CATCH_UP = 1500;    // ms to slide to a new reading
+const SNAP = 600;         // a gap bigger than this (back from another app, new vehicle) jumps instead of racing
+const MAX_SPEED = { metro: 22, tram: 15, bus: 14 };  // m/s (~80, 55, 50 km/h): a dot never moves faster
 const MAX_AHEAD = 300;    // never predict more than this many metres past the last reading
 const FEED = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/VehiclePositions';
 const LAKE = 'https://lakehouse.jwds.me/lines.json';
@@ -167,14 +168,13 @@ function match(old, fresh) {
     if (best >= 0) {
       const o = pool.splice(best, 1)[0], secs = (Date.now() - o.seen) / 1000;
       v.id = o.id;
-      v.from = o.shown ?? o.d;
+      v.shown = v.d - o.shown > SNAP ? v.d : o.shown;  // keep drawing from where it was
       // speed from STIB's last two readings, smoothed; 0 when it hasn't moved (waiting at a stop)
       const now = secs > 1 ? Math.min(25, Math.max(0, (v.d - o.raw) / secs)) : o.speed;
       v.speed = v.d === o.raw ? 0 : (o.speed ? (o.speed + now) / 2 : now);
       v.raw = v.d;
-      v.d = Math.max(v.d, v.from);  // never slide backwards when the prediction ran a little ahead
     }
-    else { v.from = v.raw = v.d; v.id = nextId++; v.speed = 0; }
+    else { v.shown = v.raw = v.d; v.id = nextId++; v.speed = 0; }
     v.seen = Date.now();
   }
 }
@@ -206,15 +206,18 @@ async function poll() {
 const title = s => s.toLowerCase().replace(/(^|[\s\-'(])\S/g, c => c.toUpperCase());
 function stopName(id) { return net.stops[id] ? title(net.stops[id][2]) : id; }
 
-// --- every frame: glide each vehicle from its previous reading to the new one over one poll interval
+// --- every frame: move each dot towards where the vehicle should be now, at a believable speed
+let lastFrame = Date.now();
 function frame() {
-  const now = Date.now();
+  const now = Date.now(), dt = Math.min(2, (now - lastFrame) / 1000);  // slow phones get fewer frames, not slower vehicles
+  lastFrame = now;
   const shown = [];
   for (const v of vehicles) {
-    // slide to the reading, then keep going at the vehicle's own speed until the next reading
-    const age = now - v.seen;
-    v.shown = Math.min(v.cap, v.d + MAX_AHEAD,
-      v.from + (v.d - v.from) * Math.min(1, age / CATCH_UP) + 0.8 * v.speed * age / 1000);  // 0.8: rather a bit behind than ahead
+    // target: last reading + its own speed since (x0.8: rather a bit behind than ahead), not past the next stop
+    const target = Math.min(v.cap, v.d + MAX_AHEAD, v.d + 0.8 * v.speed * (now - v.seen) / 1000);
+    const gap = target - v.shown;
+    // close a gap over ~4 s, never faster than a real vehicle; never backwards (it waits for the reading instead)
+    if (gap > 0) v.shown += Math.min(gap, dt * Math.min(MAX_SPEED[v.mode], Math.max(0.8 * v.speed, gap / 4)));
     if (line && v.line !== line) continue;
     if (nearPats) {  // near me: only vehicles still coming towards a nearby stop, at most 3 km away
       const i = nearPats.get(v.p);
