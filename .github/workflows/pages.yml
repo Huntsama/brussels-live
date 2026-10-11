@@ -22,6 +22,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q pytest && pytest -q
+      - run: node --test tools/
       - run: python build_network.py site/network.json
       - uses: actions/upload-pages-artifact@v3
         with:
