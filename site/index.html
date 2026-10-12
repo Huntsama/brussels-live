@@ -308,6 +308,7 @@ function showPicked() {
       <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="picked=null;document.getElementById('picked').classList.add('hidden')" aria-label="Close">✕</button></div>
     <p class="text-sm font-medium">${status(v, i)}</p>
     <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
+    <p class="text-xs text-slate-500">STIB reported it ${Math.round((Date.now() - v.seen) / 1000)} s ago${v.shown - v.d > 5 ? `, ${Math.round(v.shown - v.d)} m behind where it is drawn` : ''}${v.guess ? ' · direction guessed' : ''}.</p>
     ${usually(v.line)}`;
   if (el.innerHTML !== html) el.innerHTML = html;
   el.classList.remove('hidden');

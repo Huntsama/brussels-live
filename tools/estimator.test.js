@@ -23,6 +23,18 @@ test('a repeated line reading is no news: the vehicle keeps its speed and positi
   assert.equal(v.seen, 30000);
 });
 
+test('a destination id that is another platform of the terminus still finds the pattern by name', () => {
+  const est = Estimator.create({
+    lines: { 1: { mode: 'bus' } },
+    stops: { 30: [50.8, 4.31418, 'END'], 31: [50.8, 4.31418, 'END'] },
+    patterns: [{ line: '1', to: '30', stops: ['10', '20', '30'], at: [0, 500, 1000], secs: [60, 60], path: [[50.8, 4.3], [50.8, 4.30709], [50.8, 4.31418]] },
+               { line: '1', to: '10', stops: ['30', '20', '10'], at: [0, 500, 1000], secs: [60, 60], path: [[50.8, 4.31418], [50.8, 4.30709], [50.8, 4.3]] }],
+  });
+  const [v] = est.update(feed({ directionId: '31', pointId: '20', distanceFromPoint: 100 }), 0);
+  assert.equal(v.p.to, '30');
+  assert.ok(!v.guess);
+});
+
 test('a refreshed line with an unchanged vehicle means it really stopped', () => {
   const est = net();
   est.update(feed(bus('10', 100), bus('20', 0)), 0);

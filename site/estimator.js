@@ -43,17 +43,21 @@ const Estimator = (() => {
     return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
   }
 
-  // --- which pattern a reading belongs to: the one ending at its destination, else one that has the stop
+  // --- which pattern a reading belongs to: the one ending at its destination (by id, else by the terminus name:
+  // the other platform of the same terminus), else one that has the stop. ~10% of readings head for a 99xx code,
+  // a temporary terminus of a line on works that no stop dataset knows: those fall back to the first candidate
   function locate(net, lineId, r) {
-    const stop = norm(r.pointId), dest = norm(r.directionId);
+    const stop = norm(r.pointId), dest = norm(r.directionId), name = id => net.stops[id]?.[2];
     const cands = (net.byLine[lineId] || []).filter(p => p.stops.includes(stop));
-    const p = cands.find(p => p.to === dest)
-           || cands.find(p => p.stops.indexOf(dest) > p.stops.indexOf(stop))
-           || cands[0];
+    let p = cands.find(p => p.to === dest)
+         || (name(dest) && cands.find(p => name(p.to) === name(dest)))
+         || cands.find(p => p.stops.indexOf(dest) > p.stops.indexOf(stop));
+    const guess = !p && new Set(cands.map(p => p.to)).size > 1;  // more than one way to go and no way to tell
+    p ||= cands[0];
     if (!p) return null;
     const i = p.stops.indexOf(stop);
     const cap = p.at[i + 1] ?? p.at[i];  // a vehicle can't be past its next stop until STIB says so
-    return { line: lineId, mode: net.lines[lineId].mode, dest, p, i, cap, d: Math.min(p.at[i] + r.distanceFromPoint, cap) };
+    return { line: lineId, mode: net.lines[lineId].mode, dest, p, i, cap, guess, d: Math.min(p.at[i] + r.distanceFromPoint, cap) };
   }
 
   function create(net, overrides = {}) {
