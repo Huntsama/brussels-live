@@ -11,7 +11,7 @@ const Estimator = (() => {
     SCHED: 1.2,        // expected moving speed = SCHED x the timetable's average speed on that segment
     AHEAD: 0.9,        // predict with this share of the vehicle's speed: rather a bit behind than ahead
     CLOSE: 2,          // seconds to close a gap between the dot and where the vehicle should be
-    RUSH: 40,          // m/s: catching up to a stop STIB just confirmed
+    RUSH: 25,          // m/s: catching up to a stop STIB just confirmed (a flat 90 km/h reads as a vehicle, not a jump)
     MAX_AHEAD: 400,    // never predict more than this many metres past the last reading
     STALE: 180,        // s without a refresh of a line's data: assume the line stopped running
   };
@@ -120,7 +120,7 @@ const Estimator = (() => {
           const target = Math.min(v.cap, v.d + MAX_AHEAD, v.d + AHEAD * v.speed * (now - v.seen) / 1000);
           const gap = target - v.shown;
           // close a gap over CLOSE s, never faster than a real vehicle; never backwards (it waits for the reading instead)
-          if (gap > 0) v.shown += Math.min(gap, dt * (v.rush ? Math.max(RUSH, gap / 1.5)
+          if (gap > 0) v.shown += Math.min(gap, dt * (v.rush ? RUSH
                                                         : Math.min(MAX_SPEED[v.mode], Math.max(AHEAD * v.speed, gap / CLOSE))));
           if (v.rush && gap < 2) v.rush = false;
         }

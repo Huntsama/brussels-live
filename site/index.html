@@ -209,7 +209,8 @@ const WAIT = 'https://api-management-discovery-production.azure-api.net/api/data
 const WALK = 80;  // metres per minute
 let near = null, here = null, nearPats = null, onward = [];
 // one big button: find what's near me, and, once in that mode, the way back to the whole city
-document.getElementById('locate').addEventListener('click', () => near ? exitNear() : geo.trigger());
+// geo.trigger() toggles MapLibre's control off again on a second press, so once we know where we are, skip it
+document.getElementById('locate').addEventListener('click', () => near ? exitNear() : here ? findNear() : geo.trigger());
 geo.on('geolocate', e => {
   const first = !here;
   here = [e.coords.latitude, e.coords.longitude];
