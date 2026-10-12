@@ -6,12 +6,10 @@
 // order plus the road between them). Constants were tuned with tools/replay.js on recorded feeds.
 const Estimator = (() => {
   const DEFAULTS = {
-    SNAP: 600,         // a gap bigger than this (back from another app, new vehicle) jumps instead of racing
     MAX_SPEED: { metro: 22, tram: 15, bus: 14 },  // m/s (~80, 55, 50 km/h): a dot never moves faster
     SCHED: 1.2,        // expected moving speed = SCHED x the timetable's average speed on that segment
     AHEAD: 0.9,        // predict with this share of the vehicle's speed: rather a bit behind than ahead
     CLOSE: 2,          // seconds to close a gap between the dot and where the vehicle should be
-    RUSH: 25,          // m/s: catching up to a stop STIB just confirmed (a flat 90 km/h reads as a vehicle, not a jump)
     MAX_AHEAD: 400,    // never predict more than this many metres past the last reading
     STALE: 180,        // s without a refresh of a line's data: assume the line stopped running
   };
@@ -59,7 +57,7 @@ const Estimator = (() => {
   }
 
   function create(net, overrides = {}) {
-    const { SNAP, MAX_SPEED, SCHED, AHEAD, CLOSE, RUSH, MAX_AHEAD, STALE } = { ...DEFAULTS, ...overrides };
+    const { MAX_SPEED, SCHED, AHEAD, CLOSE, MAX_AHEAD, STALE } = { ...DEFAULTS, ...overrides };
     prep(net);
     let vehicles = [], nextId = 1;
     const lineText = {}, lineSeen = {};  // per line: STIB's last positions string and when it last changed
@@ -79,12 +77,11 @@ const Estimator = (() => {
         if (best >= 0) {
           const o = pool.splice(best, 1)[0], secs = (now - o.seen) / 1000;
           v.id = o.id;
-          v.shown = v.d - o.shown > SNAP ? v.d : o.shown;  // keep drawing from where it was
+          v.shown = v.d;  // STIB just said where it is: draw it there (median error 15 m vs 37 m when gliding on)
           // speed from STIB's last two readings, smoothed; 0 when it hasn't moved (waiting at a stop)
           const sp = secs > 1 ? Math.min(25, Math.max(0, (v.d - o.raw) / secs)) : o.speed;
           v.speed = v.d === o.raw ? 0 : (o.speed ? (o.speed + sp) / 2 : sp);
           v.raw = v.d;
-          v.rush = v.i !== o.i;  // STIB says it reached a new stop: hurry the dot there
         }
         // new vehicle: standing at a stop (0 m past it) waits, otherwise it moves at the timetable's speed straight away
         else { v.shown = v.raw = v.d; v.id = nextId++; v.speed = v.d === v.p.at[v.i] ? 0 : SCHED * sched(v); }
@@ -120,9 +117,7 @@ const Estimator = (() => {
           const target = Math.min(v.cap, v.d + MAX_AHEAD, v.d + AHEAD * v.speed * (now - v.seen) / 1000);
           const gap = target - v.shown;
           // close a gap over CLOSE s, never faster than a real vehicle; never backwards (it waits for the reading instead)
-          if (gap > 0) v.shown += Math.min(gap, dt * (v.rush ? RUSH
-                                                        : Math.min(MAX_SPEED[v.mode], Math.max(AHEAD * v.speed, gap / CLOSE))));
-          if (v.rush && gap < 2) v.rush = false;
+          if (gap > 0) v.shown += Math.min(gap, dt * Math.min(MAX_SPEED[v.mode], Math.max(AHEAD * v.speed, gap / CLOSE)));
         }
       },
     };

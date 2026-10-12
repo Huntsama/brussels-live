@@ -30,14 +30,13 @@ test('a refreshed line with an unchanged vehicle means it really stopped', () =>
   assert.equal(v.speed, 0);
 });
 
-test('a dot moves forward at the vehicle speed, never backwards and never past the next stop', () => {
+test('a dot moves forward at the vehicle speed, never past the next stop, and sits on each new reading', () => {
   const est = net();
   est.update(feed(bus('10', 100)), 0);
   est.update(feed(bus('10', 400)), 30000);  // 10 m/s
   for (let t = 30000; t < 60000; t += 250) est.advance(t, 0.25);
   const [v] = est.vehicles;
   assert.ok(v.shown > 400 && v.shown <= 500, `shown ${v.shown}`);
-  est.update(feed(bus('10', 400)), 60000);
-  for (let t = 60000; t < 70000; t += 250) est.advance(t, 0.25);
-  assert.ok(est.vehicles[0].shown >= v.shown);
+  est.update(feed(bus('10', 400), bus('20', 0)), 60000);  // line refreshed, STIB still says 400 m: back there, even if the dot had run on
+  assert.equal(est.vehicles[0].shown, 400);
 });
