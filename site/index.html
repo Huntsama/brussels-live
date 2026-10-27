@@ -207,16 +207,25 @@ setInterval(() => {
 // --- near me: the 2 closest stops (300 m, else the nearest within 1 km), what leaves from them and where it goes
 const WAIT = 'https://api-management-discovery-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes';
 const WALK = 80;  // metres per minute
-let near = null, here = null, nearPats = null, onward = [];
+let near = null, here = null, hereAcc = Infinity, usedAt = null, usedAcc = Infinity, nearPats = null, onward = [];
 // one big button: find what's near me, and, once in that mode, the way back to the whole city
 // geo.trigger() toggles MapLibre's control off again on a second press, so once we know where we are, skip it
 document.getElementById('locate').addEventListener('click', () => near ? exitNear() : here ? findNear() : geo.trigger());
+// The first fix is often a rough network guess; GPS comes seconds later. Redo "near me" when the position moved
+// 100 m or got twice as precise, instead of keeping stops near the first guess.
 geo.on('geolocate', e => {
-  const first = !here;
   here = [e.coords.latitude, e.coords.longitude];
-  if (first) findNear();
+  hereAcc = e.coords.accuracy ?? Infinity;
+  if (!usedAt) return findNear();
+  if (near && (metres(usedAt, here) > 100 || hereAcc < usedAcc / 2)) findNear();
+});
+geo.on('error', () => {
+  document.getElementById('near').classList.remove('hidden');
+  document.getElementById('near-list').innerHTML =
+    '<p class="text-sm text-slate-500">Location is blocked or unavailable. Allow location for this site in your browser settings, then press the button again.</p>';
 });
 function findNear() {
+  usedAt = here; usedAcc = hereAcc;
   const byName = {};
   for (const [id, s] of Object.entries(net.stops)) {
     const d = metres(here, s);
@@ -248,7 +257,9 @@ async function arrivals() {
   try {
     const rows = (await (await fetch(`${WAIT}?where=pointid in (${ids})&limit=100`, { cache: 'no-store' })).json()).results;
     const now = Date.now();
-    document.getElementById('near-list').innerHTML = near.map(g => {
+    const rough = hereAcc > 150
+      ? `<p class="text-xs text-amber-700">Your location is approximate (±${Math.round(hereAcc)} m); this list updates once it's more precise.</p>` : '';
+    document.getElementById('near-list').innerHTML = rough + near.map(g => {
       const wanted = new Set(g.ids.map(id => net.stops[id][3]));
       const next = rows.filter(r => wanted.has(r.pointid)).flatMap(r => JSON.parse(r.passingtimes))
         .filter(t => t.expectedArrivalTime && net.lines[t.lineId])
