@@ -74,9 +74,9 @@ const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
 
 // --- vehicles seen from above, front pointing up. Real lengths in metres; never smaller than minPx on screen.
 const SHAPES = {
-  metro: { w: 12, h: 92, m: 92, minPx: 26, cars: 4 },
-  tram:  { w: 11, h: 44, m: 44, minPx: 20, cars: 3 },
-  bus:   { w: 11, h: 22, m: 18, minPx: 14, cars: 1 },
+  metro: { w: 12, h: 92, m: 92, minPx: 28, cars: 4 },
+  tram:  { w: 11, h: 44, m: 44, minPx: 22, cars: 3 },
+  bus:   { w: 11, h: 22, m: 18, minPx: 18, cars: 1 },
 };
 function vehicleSvg(mode, color) {
   const s = SHAPES[mode], gap = 1.5, car = (s.h - gap * (s.cars - 1)) / s.cars;
@@ -196,7 +196,7 @@ function frame() {
       getIcon: v => ({ id: v.mode + v.line, url: vehicleSvg(v.mode, net.lines[v.line].color),
                        width: SHAPES[v.mode].w * 4, height: SHAPES[v.mode].h * 4 }),
       // real length in pixels at this zoom, but never smaller than minPx (deck's sizeMinPixels ignores flat icons)
-      getPosition: v => v.pos, getAngle: v => v.angle + bearing, getSize: Math.max(SHAPES[m].minPx, SHAPES[m].m / mpp),
+      getPosition: v => v.pos, getAngle: v => v.angle + bearing, getSize: Math.max(SHAPES[m].minPx * (map.getZoom() >= 14 ? 1.5 : 1), SHAPES[m].m / mpp),  // bigger at street level, small on the city view
       onClick: ({ object }) => pick(object.id) })),
   ]});
   if (picked) showPicked();
