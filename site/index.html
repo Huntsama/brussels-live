@@ -167,7 +167,7 @@ function frame() {
     nearPats ? new deck.PathLayer({ id: 'onward', data: onward.filter(o => !line || o.line === line), getPath: o => o.path,
         widthUnits: 'pixels', getWidth: 4, getColor: o => [...color(o.line), 170], capRounded: true, jointRounded: true })
     : new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
-      getWidth: p => p.line === line ? 5 : 2, getColor: p => [...color(p.line), line ? (p.line === line ? 120 : 15) : 45],
+      getWidth: p => p.line === line ? 4 : 2, getColor: p => [...color(p.line), line ? (p.line === line ? 85 : 15) : 45],
       updateTriggers: { getWidth: line, getColor: line } }),
     nearPats && new deck.TextLayer({ id: 'ends', data: onward.filter(o => !line || o.line === line), getPosition: o => o.path.at(-1),
       getText: o => `${o.line} → ${stopName(o.p.to)}`, characterSet: 'auto', getSize: 13, getColor: [15, 23, 42],
