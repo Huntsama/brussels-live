@@ -39,6 +39,7 @@
       <p class="text-xs text-slate-400">Arrival times from STIB. Your location stays on this device.</p>
     </section>
 
+    <section id="lineinfo" class="hidden rounded-lg border border-slate-200 p-4 space-y-1"></section>
     <section id="picked" class="hidden rounded-lg border border-slate-200 p-4 space-y-2"></section>
 
     <div id="browse" class="space-y-5">
@@ -200,6 +201,7 @@ function frame() {
       onClick: ({ object }) => pick(object.id) })),
   ]});
   if (picked) showPicked();
+  showLine(shown.length);
   requestAnimationFrame(frame);
 }
 setInterval(() => {
@@ -322,7 +324,20 @@ function showPicked() {
     <p class="text-sm font-medium">${status(v, i)}</p>
     <p class="text-sm">${Math.round(v.shown - v.p.at[i])} m past <b>${stopName(last)}</b>${next ? `, next stop <b>${stopName(next)}</b> in ${Math.round(v.p.at[i + 1] - v.shown)} m` : ''}.</p>
     <p class="text-xs text-slate-500">STIB reported it ${Math.round((Date.now() - v.seen) / 1000)} s ago${v.shown - v.d > 5 ? `, ${Math.round(v.shown - v.d)} m behind where it is drawn` : ''}${v.guess ? ' · direction guessed' : ''}.</p>
-    ${usually(v.line)}`;
+    ${line === v.line ? '' : usually(v.line)}`;
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.classList.remove('hidden');
+}
+
+// the picked line: where it runs, how many are out right now, how late it usually is
+const NOUN = { metro: ['metro train', 'metro trains'], tram: ['tram', 'trams'], bus: ['bus', 'buses'] };
+function showLine(n) {
+  const el = document.getElementById('lineinfo');
+  if (!line || nearPats) { el.classList.add('hidden'); return; }
+  const l = net.lines[line];
+  const html = `<div class="flex items-center gap-2">${badge(line)}<span class="font-medium">${title(l.name).replace(' - ', ' ↔ ')}</span>
+      <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="selectLine(line)" aria-label="Show all lines">✕</button></div>
+    <p class="text-sm">${n ? `${n} ${NOUN[l.mode][n === 1 ? 0 : 1]} running now` : 'No vehicle running right now'}</p>${usually(line)}`;
   if (el.innerHTML !== html) el.innerHTML = html;
   el.classList.remove('hidden');
 }
