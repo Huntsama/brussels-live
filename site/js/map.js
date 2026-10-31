@@ -90,7 +90,7 @@ function frame() {
       onClick: ({ object }) => pick(object.id) })),
   ]});
   if (picked) showPicked();
-  showLine(shown.length);
+  showLine();
   requestAnimationFrame(frame);
 }
 setInterval(() => {

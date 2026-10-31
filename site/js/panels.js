@@ -43,9 +43,10 @@ function showPicked() {
 }
 
 // the picked line: where it runs, how many are out right now, how late it usually is
-function showLine(n) {
+function showLine() {
   const el = document.getElementById('lineinfo');
   if (!line || nearPats) { el.classList.add('hidden'); return; }
+  const n = vehicles.filter(v => v.line === line).length;  // all of them, even if their mode is switched off
   const l = net.lines[line];
   const html = `<div class="flex items-center gap-2">${badge(line)}<span class="font-medium">${title(l.name).replace(' - ', ' ↔ ')}</span>
       <button class="ml-auto text-slate-400 hover:text-slate-900" onclick="selectLine(line)" aria-label="Show all lines">✕</button></div>
