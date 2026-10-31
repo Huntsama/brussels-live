@@ -3,8 +3,12 @@
 const { norm, metres, seg, pointAt } = Estimator;
 const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
 
-// a vehicle seen from above, front pointing up, as an SVG data URL
+// a vehicle seen from above, front pointing up, as an SVG data URL; built once per mode and colour, then reused
+const svgCache = {};
 function vehicleSvg(mode, color) {
+  return svgCache[mode + color] ??= drawVehicle(mode, color);
+}
+function drawVehicle(mode, color) {
   const s = SHAPES[mode], gap = 1.5, car = (s.h - gap * (s.cars - 1)) / s.cars;
   let g = '';
   for (let i = 0; i < s.cars; i++) {
