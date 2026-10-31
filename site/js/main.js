@@ -10,7 +10,12 @@ document.getElementById('lines').addEventListener('click', e => {
 });
 
 (async () => {
-  net = await (await fetch('network.json')).json();
+  try {
+    net = await (await fetch('network.json')).json();
+  } catch (e) {
+    document.getElementById('count').textContent = 'The map could not load its line data. Please reload the page.';
+    throw e;
+  }
   est = Estimator.create(net);
   const num = s => s.replace(/\D/g, '') | 0;
   document.getElementById('lines').innerHTML = ['metro', 'tram', 'bus'].map(m => {

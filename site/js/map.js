@@ -27,7 +27,11 @@ async function poll() {
     vehicles.forEach(v => n[v.mode]++);
     for (const m in n) document.querySelector(`[data-n="${m}"]`).textContent = n[m];
     document.getElementById('count').textContent = `${vehicles.length} vehicles moving`;
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error(e);
+    // say so instead of freezing on old dots; the next poll tries again
+    if (Date.now() - updated > 60000) document.getElementById('count').textContent = "STIB's live feed isn't answering, retrying…";
+  }
 }
 
 // --- every frame: advance the estimate, then draw
