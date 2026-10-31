@@ -35,11 +35,24 @@ async function poll() {
 }
 
 // --- every frame: advance the estimate, then draw
-let lastFrame = Date.now(), staticKey = '', staticLayers = [], trailsAt = 0, trailsLayer = null;
+let lastFrame = Date.now();
 function frame() {
   const now = Date.now(), dt = Math.min(2, (now - lastFrame) / 1000);  // slow phones get fewer frames, not slower vehicles
   lastFrame = now;
   est.advance(now, dt);
+  const shown = visibleVehicles();
+  // metres per screen pixel at Brussels' latitude, for real-size vehicles and trails
+  const mpp = 78271.517 * Math.cos(50.85 * Math.PI / 180) / 2 ** map.getZoom();
+  overlay.setProps({ layers: [...baseLayers(), trailLayer(shown, mpp, now), pickedRing(), ...vehicleLayers(shown, mpp)] });
+  if (picked) showPicked();
+  showLine();
+  requestAnimationFrame(frame);
+}
+
+const lineColor = id => rgb(net.lines[id].color);
+
+// which vehicles to draw: the picked line only, "near me" only the ones still coming, otherwise the modes switched on
+function visibleVehicles() {
   const shown = [];
   for (const v of vehicles) {
     if (line && v.line !== line) continue;
@@ -52,51 +65,62 @@ function frame() {
     v.marker = true;
     shown.push(v);
   }
-  const sel = vehicles.find(v => v.id === picked);
-  const mpp = 78271.517 * Math.cos(50.85 * Math.PI / 180) / 2 ** map.getZoom(), bearing = map.getBearing();
-  const color = id => rgb(net.lines[id].color);
-  // the map itself only changes when the selection does: build those layers once, not 60 times a second
+  return shown;
+}
+
+// the network (or, near me, the roads onward): only changes when the selection does, so built once, not 60 times a second
+let baseKey = '', base = [];
+function baseLayers() {
   const key = `${line}|${!!nearPats}|${near?.length}|${onward.length}`;
-  if (key !== staticKey) { staticKey = key; staticLayers = [
-    nearPats ? new deck.PathLayer({ id: 'onward', data: onward.filter(o => !line || o.line === line), getPath: o => o.path,
-        widthUnits: 'pixels', getWidth: 4, getColor: o => [...color(o.line), 170], capRounded: true, jointRounded: true })
+  if (key === baseKey) return base;
+  baseKey = key;
+  const ours = onward.filter(o => !line || o.line === line);
+  return base = [
+    nearPats ? new deck.PathLayer({ id: 'onward', data: ours, getPath: o => o.path,
+        widthUnits: 'pixels', getWidth: 4, getColor: o => [...lineColor(o.line), 170], capRounded: true, jointRounded: true })
     : new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
-      getWidth: p => p.line === line ? 4 : 2, getColor: p => [...color(p.line), line ? (p.line === line ? 85 : 15) : 45],
+      getWidth: p => p.line === line ? 4 : 2, getColor: p => [...lineColor(p.line), line ? (p.line === line ? 85 : 15) : 45],
       updateTriggers: { getWidth: line, getColor: line } }),
-    nearPats && new deck.TextLayer({ id: 'ends', data: onward.filter(o => !line || o.line === line), getPosition: o => o.path.at(-1),
+    nearPats && new deck.TextLayer({ id: 'ends', data: ours, getPosition: o => o.path.at(-1),
       getText: o => `${o.line} → ${stopName(o.p.to)}`, characterSet: 'auto', getSize: 13, getColor: [15, 23, 42],
       background: true, getBackgroundColor: [255, 255, 255, 230], backgroundPadding: [4, 2], fontWeight: 600,
       fontFamily: 'ui-sans-serif, system-ui, sans-serif' }),
     near && new deck.ScatterplotLayer({ id: 'near-stops', data: near.flatMap(g => g.ids), getPosition: id => [net.stops[id][1], net.stops[id][0]],
       getRadius: 6, radiusUnits: 'pixels', getFillColor: [255, 255, 255], getLineColor: [15, 23, 42], stroked: true, lineWidthMinPixels: 2 }),
-  ]; }
-  // trails: the costly layer (a path per vehicle), rebuilt 4 times a second; as long as ~30 px so motion shows when zoomed out
-  if (now - trailsAt > 250) {
-    trailsAt = now;
-    const len = Math.max(120, 30 * mpp);
-    for (const v of shown) v.t = trail(v.p, v.shown - len, v.shown);
-    trailsLayer = new deck.TripsLayer({ id: 'trails', data: shown.slice(), getPath: v => v.t.path,
-      getTimestamps: v => v.t.ts, getColor: v => color(v.line), currentTime: 0, trailLength: len,
-      widthMinPixels: 3, capRounded: true, jointRounded: true });
-  }
-  overlay.setProps({ layers: [
-    ...staticLayers,
-    trailsLayer,
-    sel && modeOn[sel.mode] && new deck.ScatterplotLayer({ id: 'picked', data: [sel], getPosition: v => v.pos,
-      getRadius: 60, radiusMinPixels: 22, stroked: true, filled: true, getFillColor: [15, 23, 42, 25],
-      getLineColor: [15, 23, 42], lineWidthMinPixels: 2 }),
-    // one layer per mode so each has its own size; metro drawn on top
-    ...['bus', 'tram', 'metro'].map(m => new deck.IconLayer({ id: m, data: shown.filter(v => v.mode === m), pickable: true,
-      getIcon: v => ({ id: v.mode + v.line, url: vehicleSvg(v.mode, net.lines[v.line].color),
-                       width: SHAPES[v.mode].w * 4, height: SHAPES[v.mode].h * 4 }),
-      // real length in pixels at this zoom, but never smaller than minPx (deck's sizeMinPixels ignores flat icons)
-      getPosition: v => v.pos, getAngle: v => v.angle + bearing, getSize: Math.max(SHAPES[m].minPx * (map.getZoom() >= 14 ? 1.5 : 1), SHAPES[m].m / mpp),  // bigger at street level, small on the city view
-      onClick: ({ object }) => pick(object.id) })),
-  ]});
-  if (picked) showPicked();
-  showLine();
-  requestAnimationFrame(frame);
+  ];
 }
+
+// fading trails: the costly layer (a path per vehicle), rebuilt 4 times a second; ~30 px long so motion shows zoomed out
+let trailsAt = 0, trails = null;
+function trailLayer(shown, mpp, now) {
+  if (now - trailsAt < 250) return trails;
+  trailsAt = now;
+  const len = Math.max(120, 30 * mpp);
+  for (const v of shown) v.t = trail(v.p, v.shown - len, v.shown);
+  return trails = new deck.TripsLayer({ id: 'trails', data: shown.slice(), getPath: v => v.t.path,
+    getTimestamps: v => v.t.ts, getColor: v => lineColor(v.line), currentTime: 0, trailLength: len,
+    widthMinPixels: 3, capRounded: true, jointRounded: true });
+}
+
+// a ring around the vehicle whose panel is open
+function pickedRing() {
+  const sel = vehicles.find(v => v.id === picked);
+  return sel && modeOn[sel.mode] && new deck.ScatterplotLayer({ id: 'picked', data: [sel], getPosition: v => v.pos,
+    getRadius: 60, radiusMinPixels: 22, stroked: true, filled: true, getFillColor: [15, 23, 42, 25],
+    getLineColor: [15, 23, 42], lineWidthMinPixels: 2 });
+}
+
+// the vehicles, one layer per mode so each has its own size; metro drawn on top
+function vehicleLayers(shown, mpp) {
+  const bearing = map.getBearing(), boost = map.getZoom() >= 14 ? 1.5 : 1;  // bigger at street level, small on the city view
+  return ['bus', 'tram', 'metro'].map(m => new deck.IconLayer({ id: m, data: shown.filter(v => v.mode === m), pickable: true,
+    getIcon: v => ({ id: v.mode + v.line, url: vehicleSvg(v.mode, net.lines[v.line].color),
+                     width: SHAPES[v.mode].w * 4, height: SHAPES[v.mode].h * 4 }),
+    // real length in pixels at this zoom, but never smaller than minPx (deck's sizeMinPixels ignores flat icons)
+    getPosition: v => v.pos, getAngle: v => v.angle + bearing, getSize: Math.max(SHAPES[m].minPx * boost, SHAPES[m].m / mpp),
+    onClick: ({ object }) => pick(object.id) }));
+}
+
 setInterval(() => {
   if (updated) document.getElementById('ago').textContent = `· updated ${Math.round((Date.now() - updated) / 1000)}s ago`;
 }, 1000);
