@@ -55,8 +55,8 @@ async function arrivals() {
     document.getElementById('near-list').innerHTML = rough + near.map(g => {
       const wanted = new Set(g.ids.map(id => net.stops[id][3]));
       const next = rows.filter(r => wanted.has(r.pointid)).flatMap(r => JSON.parse(r.passingtimes))
-        .filter(t => t.expectedArrivalTime && net.lines[t.lineId])
-        .map(t => ({ line: t.lineId, to: t.destination?.fr ?? '', min: Math.max(0, Math.round((Date.parse(t.expectedArrivalTime) - now) / 60000)) }))
+        .filter(t => t.expectedArrivalTime && t.destination?.fr && net.lines[t.lineId])  // STIB sometimes omits where it goes: skip those
+        .map(t => ({ line: t.lineId, to: t.destination.fr, min: Math.max(0, Math.round((Date.parse(t.expectedArrivalTime) - now) / 60000)) }))
         .sort((a, b) => a.min - b.min);
       // one row per line and direction, with its next two arrivals
       const rowsHtml = Object.values(next.reduce((acc, t) => ((acc[t.line + t.to] ??= { ...t, mins: [] }).mins.push(t.min), acc), {}))
