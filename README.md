@@ -96,7 +96,21 @@ Result on the unseen recording (6 minutes, 5,462 real readings):
 | Bias (negative = dot behind the vehicle) | −24 m | +0 m |
 | Readings where the dot was >50 m behind | 30% | 23% |
 
-The remaining ~45 m is mostly what can't be known from this feed: a vehicle's reading is up to 30 s old, and nothing says how long it will wait at a stop or a light. The next signal to add is STIB's own arrival predictions (`WaitingTimes`), which say when a vehicle will reach its next stop.
+Re-measured on 1 Nov 2026 with the current code, on a new 6-minute recording that is in the repo (a Sunday around noon, so lighter traffic than a weekday):
+
+| 5,490 real readings | All | Vehicle had moved | Bus | Tram |
+|---|---|---|---|---|
+| Typical error (median) | 31 m | 55 m | 31 m | 31 m |
+| Bias | −19 m | −41 m | −15 m | −17 m |
+| >50 m behind | 24% | 37% | 24% | 24% |
+
+Reproduce it:
+
+```bash
+node tools/replay.js recordings/2026-11-01-sunday.jsonl
+```
+
+The remaining error is mostly what can't be known from this feed: a vehicle's reading is up to 30 s old, and nothing says how long it will wait at a stop or a light. The next signal to add is STIB's own arrival predictions (`WaitingTimes`), which say when a vehicle will reach its next stop.
 
 ## Fed by Brussels Lakehouse
 

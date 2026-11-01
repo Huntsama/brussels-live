@@ -1,3 +1,4 @@
 site/network.json
 __pycache__/
 *.jsonl
+!recordings/*.jsonl
