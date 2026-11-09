@@ -4,7 +4,7 @@ const map = new maplibregl.Map({ container: 'map', style: 'https://tiles.openfre
   center: [4.36, 50.845], zoom: 12.6, attributionControl: { compact: true } });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 // blue dot, accuracy circle and follow mode come with MapLibre; the browser asks permission
-const geo = new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true,
+const geo = new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }, trackUserLocation: true,
   fitBoundsOptions: { maxZoom: 16 } });
 map.addControl(geo, 'top-right');
 const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [],

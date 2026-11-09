@@ -1,3 +1,5 @@
-.chip[aria-pressed="false"] { opacity: .35; }
+.chip[aria-pressed="true"] { background: #0f172a; color: #fff; border-color: #0f172a; }
+.chip[aria-pressed="true"] span { color: #cbd5e1; }
+.chip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 .line[aria-pressed="true"] { outline: 2px solid #0f172a; outline-offset: 2px; }
 .deck-tooltip { font: 13px/1.3 ui-sans-serif, system-ui, sans-serif !important; border-radius: 6px; }

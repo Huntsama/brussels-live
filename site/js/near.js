@@ -3,7 +3,19 @@
 let near = null, here = null, hereAcc = Infinity, usedAt = null, usedAcc = Infinity, nearPats = null, onward = [];
 // one big button: find what's near me, and, once in that mode, the way back to the whole city
 // geo.trigger() toggles MapLibre's control off again on a second press, so once we know where we are, skip it
-document.getElementById('locate').addEventListener('click', () => near ? exitNear() : here ? findNear() : geo.trigger());
+document.getElementById('locate').addEventListener('click', () => near ? exitNear() : here ? findNear() : askWhere());
+const say = msg => {
+  document.getElementById('near').classList.remove('hidden');
+  document.getElementById('near-list').innerHTML = `<p class="text-sm text-slate-500">${msg}</p>`;
+};
+// Before, a press showed nothing while the browser asked permission or looked for a fix, and a second press after
+// an error switched MapLibre's control off instead of retrying. Now: say what's happening, and always (re)start it.
+function askWhere() {
+  say('Finding your location… If your browser asks, choose "Allow".');
+  const s = geo._watchState;  // ponytail: MapLibre 4 internal; trigger() cycles OFF → on → OFF, so restart from OFF
+  if (s && s !== 'OFF') geo.trigger();
+  geo.trigger();
+}
 // The first fix is often a rough network guess; GPS comes seconds later. Redo "near me" when the position moved
 // 100 m or got twice as precise, instead of keeping stops near the first guess.
 geo.on('geolocate', e => {
@@ -12,11 +24,9 @@ geo.on('geolocate', e => {
   if (!usedAt) return findNear();
   if (near && (metres(usedAt, here) > 100 || hereAcc < usedAcc / 2)) findNear();
 });
-geo.on('error', () => {
-  document.getElementById('near').classList.remove('hidden');
-  document.getElementById('near-list').innerHTML =
-    '<p class="text-sm text-slate-500">Location is blocked or unavailable. Allow location for this site in your browser settings, then press the button again.</p>';
-});
+geo.on('error', e => say(e.code === 1
+  ? 'Location is blocked. Allow location for this site in your browser settings, then press the button again.'
+  : "Couldn't get your location in time (no GPS signal?). Press the button to try again."));
 function findNear() {
   usedAt = here; usedAcc = hereAcc;
   const byName = {};
