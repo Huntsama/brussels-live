@@ -56,11 +56,12 @@ function visibleVehicles() {
   const shown = [];
   for (const v of vehicles) {
     if (line && v.line !== line) continue;
-    if (nearPats) {  // near me: only vehicles still coming towards a nearby stop, at most 3 km away
-      const i = nearPats.get(v.p);
-      if (i === undefined || v.shown > v.p.at[i] + 20 || v.shown < v.p.at[i] - 3000) continue;
-    } else if (!modeOn[v.mode]) continue;
     v.pos = pointAt(v.p, v.shown);
+    if (nearPats) {  // near me: vehicles still coming towards a nearby stop (at most 3 km away), or already within the radius
+      const i = nearPats.get(v.p);
+      const coming = i !== undefined && v.shown <= v.p.at[i] + 20 && v.shown >= v.p.at[i] - 3000;
+      if (!coming && metres(here, [v.pos[1], v.pos[0]]) > radius) continue;
+    } else if (!modeOn[v.mode]) continue;
     v.angle = angleAt(v.p, v.shown);
     v.marker = true;
     shown.push(v);

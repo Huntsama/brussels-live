@@ -32,6 +32,10 @@
     <section id="near" class="hidden space-y-4">
       <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 class="text-xs font-medium uppercase tracking-wide text-slate-500">Leaving from near you</h2>
+        <label class="text-sm text-slate-600">within
+          <select id="radius" class="border border-slate-300 rounded px-1 py-0.5 bg-white">
+            <option value="300">300 m</option><option value="500">500 m</option><option value="1000">1 km</option>
+          </select></label>
         <button id="all" class="ml-auto text-sm underline text-slate-600 whitespace-nowrap">Show all of Brussels</button>
       </div>
       <div id="near-list" class="space-y-4"></div>

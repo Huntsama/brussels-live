@@ -1,5 +1,9 @@
-// "Near me": the 2 closest stops (300 m, else the nearest within 1 km), what leaves from them and where it goes
+// "Near me": every stop within the chosen radius (else the nearest within 1 km), what leaves from them and where it goes
 
+// radius the person picks (300 m / 500 m / 1 km), remembered on this device
+let radius = 300;
+try { radius = +localStorage.getItem('nearRadius') || 300; } catch (e) {}
+const LISTED = 4;  // stops with an arrivals list; the map uses every stop in the radius
 let near = null, here = null, hereAcc = Infinity, usedAt = null, usedAcc = Infinity, nearPats = null, onward = [];
 // one big button: find what's near me, and, once in that mode, the way back to the whole city
 // geo.trigger() toggles MapLibre's control off again on a second press, so once we know where we are, skip it
@@ -40,7 +44,8 @@ function findNear() {
     g.ids.push(id); g.d = Math.min(g.d, d);
   }
   const all = Object.values(byName).sort((a, b) => a.d - b.d);
-  near = all.filter(g => g.d <= 300).slice(0, 2);
+  // before: only the 2 closest stops, so a bus at a third stop next to you vanished from the map
+  near = all.filter(g => g.d <= radius);
   if (!near.length) near = all.slice(0, 1);
   document.getElementById('near').classList.remove('hidden');
   document.getElementById('browse').classList.add('hidden');
@@ -60,13 +65,15 @@ function findNear() {
 }
 async function arrivals() {
   if (!near?.length) return;
-  const ids = near.flatMap(g => g.ids.map(id => `"${net.stops[id][3]}"`)).join(',');
+  const listed = near.slice(0, LISTED);
+  const ids = listed.flatMap(g => g.ids.map(id => `"${net.stops[id][3]}"`)).join(',');
   try {
     const rows = (await (await fetch(`${WAIT}?where=pointid in (${ids})&limit=100`, { cache: 'no-store' })).json()).results;
     const now = Date.now();
     const rough = hereAcc > 150
       ? `<p class="text-xs text-amber-700">Your location is approximate (±${Math.round(hereAcc)} m); this list updates once it's more precise.</p>` : '';
-    document.getElementById('near-list').innerHTML = rough + near.map(g => {
+    const more = near.length > LISTED ? `<p class="text-xs text-slate-500">${near.length - LISTED} more stops in this radius are on the map.</p>` : '';
+    document.getElementById('near-list').innerHTML = rough + listed.map(g => {
       const wanted = new Set(g.ids.map(id => net.stops[id][3]));
       const next = rows.filter(r => wanted.has(r.pointid)).flatMap(r => JSON.parse(r.passingtimes))
         .filter(t => t.expectedArrivalTime && t.destination?.fr && net.lines[t.lineId])  // STIB sometimes omits where it goes: skip those
@@ -79,7 +86,7 @@ async function arrivals() {
             <span class="ml-auto shrink-0 text-right tabular-nums"><b>${t.mins[0] === 0 ? 'now' : t.mins[0] + ' min'}</b>${t.mins[1] !== undefined ? `<span class="text-slate-400"> · ${t.mins[1]}</span>` : ''}</span></button>`).join('');
       return `<div><p class="text-sm mb-1"><b>${title(g.name)}</b> <span class="text-slate-500">· ${Math.round(g.d / 10) * 10} m, ${Math.max(1, Math.round(g.d / WALK))} min walk</span></p>
         ${rowsHtml || '<p class="text-sm text-slate-500">Nothing announced right now.</p>'}</div>`;
-    }).join('');
+    }).join('') + more;
   } catch (e) { console.error(e); }
 }
 setInterval(arrivals, POLL);
@@ -93,4 +100,10 @@ function exitNear() {
 document.getElementById('all').addEventListener('click', exitNear);
 document.getElementById('near-list').addEventListener('click', e => {
   const b = e.target.closest('[data-line]'); if (b) selectLine(b.dataset.line);  // tap again to see all nearby lines
+});
+document.getElementById('radius').value = radius;
+document.getElementById('radius').addEventListener('change', e => {
+  radius = +e.target.value;
+  try { localStorage.setItem('nearRadius', radius); } catch (err) {}
+  if (here) findNear();
 });
