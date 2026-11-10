@@ -68,9 +68,35 @@ function visibleVehicles() {
 }
 
 // the network (or, near me, the roads onward): only changes when the selection does, so built once, not 60 times a second
+// stations as dots: the picked line's stops, or with no line picked the metro stations only (53, so the map stays
+// readable; all ~2,150 stops at once is a carpet of dots). One dot per station name, midway between its platforms.
+const stationCache = {};
+function stations() {
+  const k = line || 'metro';
+  if (stationCache[k]) return stationCache[k];
+  const byName = {};
+  for (const p of net.patterns) {
+    if (line ? p.line !== line : net.lines[p.line].mode !== 'metro') continue;
+    for (const id of p.stops) { const s = net.stops[id]; if (s) (byName[s[2]] ??= { name: title(s[2]), line: p.line, pts: [] }).pts.push(s); }
+  }
+  return stationCache[k] = Object.values(byName).map(g => ({ name: g.name, line: g.line,
+    pos: [g.pts.reduce((a, s) => a + s[1], 0) / g.pts.length, g.pts.reduce((a, s) => a + s[0], 0) / g.pts.length] }));
+}
+const NAMES_FROM = 13;  // zoom from which station names fit without piling up
+// two stops close together (Bozar / Royale): the second name waits until you zoom in, instead of sitting on the first.
+// A name takes about 90 x 18 px; keep a station's name only if no already-kept name is inside that box.
+function roomy(list, zoom) {
+  const mpp = 78271.517 * Math.cos(50.85 * Math.PI / 180) / 2 ** zoom, kx = 111320 * Math.cos(50.85 * Math.PI / 180) / mpp, ky = 111320 / mpp;
+  const kept = [];
+  for (const s of list) if (!kept.some(k => Math.abs(k.pos[0] - s.pos[0]) * kx < 90 && Math.abs(k.pos[1] - s.pos[1]) * ky < 18)) kept.push(s);
+  return kept;
+}
+
 let baseKey = '', base = [];
 function baseLayers() {
-  const key = `${line}|${!!nearPats}|${near?.length}|${onward.length}|${radius}|${usedAt}`;
+  const zoomStep = Math.round(map.getZoom() * 2);  // names are re-picked every half zoom level
+  const named = map.getZoom() >= NAMES_FROM, dots = !nearPats && (line || modeOn.metro);
+  const key = `${line}|${!!nearPats}|${near?.length}|${onward.length}|${radius}|${usedAt}|${named && zoomStep}|${dots}`;
   if (key === baseKey) return base;
   baseKey = key;
   const ours = onward.filter(o => !line || o.line === line);
@@ -80,6 +106,11 @@ function baseLayers() {
     : new deck.PathLayer({ id: 'network', data: net.patterns, getPath: p => p.lonlat, widthUnits: 'pixels',
       getWidth: p => p.line === line ? 4 : 2, getColor: p => [...lineColor(p.line), line ? (p.line === line ? 85 : 15) : 45],
       updateTriggers: { getWidth: line, getColor: line } }),
+    dots && new deck.ScatterplotLayer({ id: 'stations', data: stations(), getPosition: s => s.pos, getRadius: 4, radiusUnits: 'pixels',
+      getFillColor: [255, 255, 255], getLineColor: s => lineColor(s.line), stroked: true, lineWidthMinPixels: 2 }),
+    dots && named && new deck.TextLayer({ id: 'station-names', data: roomy(stations(), zoomStep / 2), getPosition: s => s.pos, getText: s => s.name,
+      characterSet: 'auto', getSize: 12, getColor: [15, 23, 42], getPixelOffset: [0, -14], fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+      background: true, getBackgroundColor: [255, 255, 255, 215], backgroundPadding: [3, 1] }),
     nearPats && new deck.TextLayer({ id: 'ends', data: ours, getPosition: o => o.path.at(-1),
       getText: o => `${o.line} → ${stopName(o.p.to)}`, characterSet: 'auto', getSize: 13, getColor: [15, 23, 42],
       background: true, getBackgroundColor: [255, 255, 255, 230], backgroundPadding: [4, 2], fontWeight: 600,
