@@ -51,16 +51,14 @@ function frame() {
 
 const lineColor = id => rgb(net.lines[id].color);
 
-// which vehicles to draw: the picked line only, "near me" only the ones still coming, otherwise the modes switched on
+// which vehicles to draw: the picked line only, "near me" only the ones inside the radius, otherwise the modes switched on
 function visibleVehicles() {
   const shown = [];
   for (const v of vehicles) {
     if (line && v.line !== line) continue;
     v.pos = pointAt(v.p, v.shown);
-    if (nearPats) {  // near me: vehicles still coming towards a nearby stop (at most 3 km away), or already within the radius
-      const i = nearPats.get(v.p);
-      const coming = i !== undefined && v.shown <= v.p.at[i] + 20 && v.shown >= v.p.at[i] - 3000;
-      if (!coming && metres(here, [v.pos[1], v.pos[0]]) > radius) continue;
+    if (nearPats) {  // near me: exactly the vehicles inside the radius circle, nothing outside it
+      if (metres(here, [v.pos[1], v.pos[0]]) > radius) continue;
     } else if (!modeOn[v.mode]) continue;
     v.angle = angleAt(v.p, v.shown);
     v.marker = true;
@@ -72,7 +70,7 @@ function visibleVehicles() {
 // the network (or, near me, the roads onward): only changes when the selection does, so built once, not 60 times a second
 let baseKey = '', base = [];
 function baseLayers() {
-  const key = `${line}|${!!nearPats}|${near?.length}|${onward.length}`;
+  const key = `${line}|${!!nearPats}|${near?.length}|${onward.length}|${radius}|${usedAt}`;
   if (key === baseKey) return base;
   baseKey = key;
   const ours = onward.filter(o => !line || o.line === line);
@@ -86,6 +84,8 @@ function baseLayers() {
       getText: o => `${o.line} → ${stopName(o.p.to)}`, characterSet: 'auto', getSize: 13, getColor: [15, 23, 42],
       background: true, getBackgroundColor: [255, 255, 255, 230], backgroundPadding: [4, 2], fontWeight: 600,
       fontFamily: 'ui-sans-serif, system-ui, sans-serif' }),
+    near && new deck.ScatterplotLayer({ id: 'radius', data: [usedAt], getPosition: h => [h[1], h[0]], getRadius: radius,  // metres
+      filled: true, getFillColor: [37, 99, 235, 18], stroked: true, getLineColor: [37, 99, 235, 160], lineWidthMinPixels: 2 }),
     near && new deck.ScatterplotLayer({ id: 'near-stops', data: near.flatMap(g => g.ids), getPosition: id => [net.stops[id][1], net.stops[id][0]],
       getRadius: 6, radiusUnits: 'pixels', getFillColor: [255, 255, 255], getLineColor: [15, 23, 42], stroked: true, lineWidthMinPixels: 2 }),
   ];
