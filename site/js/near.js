@@ -24,10 +24,13 @@ geo.on('geolocate', e => {
   if (!usedAt) return findNear();
   if (near && (metres(usedAt, here) > 100 || hereAcc < usedAcc / 2)) findNear();
 });
-geo.on('error', e => say(e.code === 1
+// Once we have a position, a later error (phones time out the watch when they get no new fix in 15 s, e.g. standing
+// still indoors) used to wipe the list. Keep the last position and the list instead.
+geo.on('error', e => here || say(e.code === 1
   ? 'Location is blocked. Allow location for this site in your browser settings, then press the button again.'
   : "Couldn't get your location in time (no GPS signal?). Press the button to try again."));
 function findNear() {
+  const entering = !near;
   usedAt = here; usedAcc = hereAcc;
   const byName = {};
   for (const [id, s] of Object.entries(net.stops)) {
@@ -51,7 +54,8 @@ function findNear() {
     if (i >= 0) nearPats.set(p, i);
   }
   onward = [...nearPats].map(([p, i]) => ({ p, line: p.line, path: trail(p, p.at[i], p.cum.at(-1)).path }));
-  if (line) selectLine(line);
+  if (entering) say('Found you. Loading what leaves from here…');  // replaces "Finding…" or an earlier timeout message
+  if (line && entering) selectLine(line);  // clear the line on entry only; a GPS refresh used to toggle a tapped line off
   arrivals();
 }
 async function arrivals() {
